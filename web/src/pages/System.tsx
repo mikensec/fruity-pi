@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { get, post, del, setCsrf } from "../api";
 import { useAppState, refresh } from "../store";
-import { JobLog, Switch, toast, toastError, fmtBytes, timeAgo, Modal, copy } from "../ui";
+import { JobLog, Switch, toast, toastError, fmtBytes, timeAgo, Modal, copy, FieldLabel, Help } from "../ui";
 
 export interface SystemInfo {
   checks: { id: string; label: string; ok: boolean; detail?: string }[];
@@ -207,6 +207,10 @@ export function System() {
         <div className="card">
           <div className="card-h">
             <h3>Secrets & API keys</h3>
+            <Help topic="secrets" />
+            <span className="muted small right">
+              private repos & packages <Help topic="privateRepos" />
+            </span>
           </div>
           <div className="card-b">
             <SecretsEditor secrets={sys.secrets} providerKeys={sys.providerKeys} onChange={reload} />
@@ -220,7 +224,7 @@ export function System() {
             </div>
             <div className="card-b col">
               <label className="field">
-                Max concurrent prompts <span className="hint">across all instances; extra prompts queue</span>
+                <FieldLabel text="Max concurrent prompts" help="concurrency" hint="across all instances" />
                 <input
                   type="number"
                   min={1}
@@ -258,7 +262,9 @@ export function System() {
                   }}
                 />
                 <div className="grow">
-                  <div>Web shell</div>
+                  <div>
+                    Web shell <Help topic="webShell" />
+                  </div>
                   <div className="muted tiny">{cfg.shellLocked ? "Locked off in config.json" : "Terminal on this VM from the browser. Off by default; enabling asks for your password."}</div>
                 </div>
               </div>
@@ -272,14 +278,18 @@ export function System() {
                   }
                 />
                 <div className="grow">
-                  <div>Record shell sessions</div>
+                  <div>
+                    Record shell sessions <Help topic="recordShell" />
+                  </div>
                   <div className="muted tiny">asciicast files in ~/.fruity-pi/recordings (mode 600)</div>
                 </div>
               </div>
               <div className="row nowrap">
                 <Switch checked={cfg.totpEnabled} onChange={(v) => setPwModal(v ? "totp" : "totp-off")} />
                 <div className="grow">
-                  <div>Two-factor login (TOTP)</div>
+                  <div>
+                    Two-factor login (TOTP) <Help topic="totp" />
+                  </div>
                   <div className="muted tiny">Any authenticator app</div>
                 </div>
               </div>
@@ -521,14 +531,14 @@ function ApiTokens() {
                   <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="claude-orchestrator" autoFocus />
                 </label>
                 <label className="field">
-                  Scope
+                  <FieldLabel text="Scope" help="tokenScope" />
                   <select value={f.scope} onChange={(e) => setF({ ...f, scope: e.target.value })}>
                     <option value="full">Full: run and manage agents</option>
                     <option value="read">Read-only: view state & collect answers</option>
                   </select>
                 </label>
                 <label className="field">
-                  Expires after (days) <span className="hint">blank = never</span>
+                  <FieldLabel text="Expires after (days)" help="tokenExpiry" hint="blank = never" />
                   <input type="number" min={1} value={f.ttlDays} onChange={(e) => setF({ ...f, ttlDays: e.target.value })} />
                 </label>
                 <label className="field">

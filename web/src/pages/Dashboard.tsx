@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { post } from "../api";
 import { useAppState } from "../store";
-import { StatusPill, Modal, useConfirm, toast, toastError, fmtCost, timeAgo, useTick, Empty, JobLog } from "../ui";
+import { StatusPill, Modal, useConfirm, toast, toastError, fmtCost, timeAgo, useTick, Empty, JobLog, FieldLabel, Help } from "../ui";
 import { CommandBar } from "./CommandBar";
 import type { Instance } from "../types";
 
@@ -79,7 +79,7 @@ export function Dashboard() {
         )}
         <div className="stats">
           <Stat k="Instances" v={state.instances.length} sub={`${state.stats.live} live`} c="var(--berry)" />
-          <Stat k="Running" v={counts.running} sub={`max ${state.stats.maxConcurrent}`} c="var(--mango)" />
+          <Stat k={<>Running <Help topic="concurrency" /></>} v={counts.running} sub={`max ${state.stats.maxConcurrent}`} c="var(--mango)" />
           <Stat k="Queued" v={state.stats.queued} c="var(--grape)" />
           <Stat k="Idle" v={counts.idle} c="var(--kiwi)" />
           <Stat k="Errors" v={counts.error} c="var(--straw)" />
@@ -158,7 +158,7 @@ export function Dashboard() {
   );
 }
 
-function Stat({ k, v, sub, c }: { k: string; v: React.ReactNode; sub?: string; c: string }) {
+function Stat({ k, v, sub, c }: { k: React.ReactNode; v: React.ReactNode; sub?: string; c: string }) {
   return (
     <div className="stat" style={{ ["--c" as any]: c }}>
       <div className="k">{k}</div>
@@ -207,7 +207,7 @@ function InstanceCard({ inst, selected, onSelect, shellEnabled }: { inst: Instan
         {inst.modelLabel && <span className="badge berry ellipsis" style={{ maxWidth: 170 }}>{inst.modelLabel}</span>}
         {inst.queuePosition && <span className="badge berry">queue #{inst.queuePosition}</span>}
         {inst.pendingRestart && <span className="badge mango">update after run</span>}
-        {!inst.pendingRestart && (inst.configDrift || inst.repoDrift) && <span className="badge mango" title="Config or tracked repo changed since start">drift</span>}
+        {!inst.pendingRestart && (inst.configDrift || inst.repoDrift) && <span className="row nowrap" style={{ gap: 2 }}><span className="badge mango">drift</span><Help topic="drift" /></span>}
         {inst.lastError && inst.status === "error" && <span className="badge straw ellipsis" style={{ maxWidth: 200 }} title={inst.lastError}>{inst.lastError}</span>}
       </div>
       <div className="inst-tail">{tail ? tail : <span className="empty-tail">no output yet</span>}</div>
@@ -281,7 +281,7 @@ function NewInstances({ onClose }: { onClose: () => void }) {
         <>
           <div className="grid2">
             <label className="field">
-              Profile
+              <FieldLabel text="Profile" help="profileId" />
               <select value={f.profile} onChange={(e) => set("profile", e.target.value)}>
                 {state.profiles.map((p) => (
                   <option key={p.id}>{p.id}</option>
@@ -289,23 +289,23 @@ function NewInstances({ onClose }: { onClose: () => void }) {
               </select>
             </label>
             <label className="field">
-              How many
+              <FieldLabel text="How many" help="count" />
               <input type="number" min={1} max={200} value={f.count} onChange={(e) => set("count", Number(e.target.value))} />
             </label>
             <label className="field">
-              Cluster <span className="hint">optional, to target as cluster:name</span>
+              <FieldLabel text="Cluster" help="cluster" hint="optional" />
               <input value={f.cluster} onChange={(e) => set("cluster", e.target.value.toLowerCase())} placeholder="e.g. scouts" />
             </label>
             <label className="field">
-              Name prefix <span className="hint">defaults to cluster or profile</span>
+              <FieldLabel text="Name prefix" help="namePrefix" hint="optional" />
               <input value={f.namePrefix} onChange={(e) => set("namePrefix", e.target.value.toLowerCase())} />
             </label>
             <label className="field">
-              Working directory <span className="hint">shared; blank = private workspace each</span>
+              <FieldLabel text="Working directory" help="cwd" hint="blank = private workspace" />
               <input className="mono-input" value={f.cwd} onChange={(e) => set("cwd", e.target.value)} placeholder="~/src/project" />
             </label>
             <label className="field">
-              Model override <span className="hint">provider/model</span>
+              <FieldLabel text="Model override" help="modelOverride" hint="optional" />
               <input className="mono-input" value={f.model} onChange={(e) => set("model", e.target.value)} placeholder="(profile default)" />
             </label>
           </div>

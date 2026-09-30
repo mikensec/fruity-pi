@@ -14,6 +14,7 @@ import { Packages } from "./pages/Packages";
 import { Shell } from "./pages/Shell";
 import { System } from "./pages/System";
 import { Setup } from "./pages/Setup";
+import { Import } from "./pages/Import";
 import { JobsButton } from "./pages/Jobs";
 
 function useRoute() {
@@ -36,6 +37,7 @@ const NAV = [
   { path: "profiles", label: "Profiles", icon: "◈" },
   { path: "repos", label: "Tracked repos", icon: "⟳" },
   { path: "packages", label: "Packages", icon: "▣" },
+  { path: "import", label: "Import from pi", icon: "⇲" },
   { path: "shell", label: "Shell", icon: "›_" },
   { path: "system", label: "System", icon: "⚙" },
 ];
@@ -69,6 +71,7 @@ function Shell_({ onLogout }: { onLogout: () => void }) {
   else if (page === "shell") body = <Shell instanceId={route[1] ? decodeURIComponent(route[1]) : undefined} />;
   else if (page === "system") body = <System />;
   else if (page === "setup") body = <Setup />;
+  else if (page === "import") body = <Import />;
   else body = <div className="page">Not found</div>;
 
   return (

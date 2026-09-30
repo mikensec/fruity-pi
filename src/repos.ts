@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { repoPaths, ensureDir, paths } from "./paths.js";
-import { runCommand } from "./pi.js";
+import { runCommand, toolEnv } from "./pi.js";
 import { store } from "./store.js";
 import { publish } from "./bus.js";
 import { audit } from "./audit.js";
@@ -10,7 +10,7 @@ import { requestRestartWhenIdle } from "./supervisor.js";
 import type { Repo, RepoKind } from "./types.js";
 
 type Log = (line: string) => void;
-const gitEnv = () => ({ ...(process.env as Record<string, string>), GIT_TERMINAL_PROMPT: "0" });
+const gitEnv = () => toolEnv();
 const locks = new Map<string, Promise<unknown>>();
 
 function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
@@ -141,7 +141,7 @@ async function materialize(repo: Repo, log: Log, targetSha?: string): Promise<{ 
       const pkg = JSON.parse(fs.readFileSync(pkgFile, "utf8"));
       if (Object.keys(pkg.dependencies ?? {}).length) {
         log("installing package dependencies (npm install --omit=dev)");
-        const n = await runCommand("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: root, timeoutMs: 600_000, env: { ...(process.env as Record<string, string>), npm_config_cache: path.join(paths.root, "npm-cache") } }, log);
+        const n = await runCommand("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: root, timeoutMs: 600_000, env: toolEnv({ npm_config_cache: path.join(paths.root, "npm-cache") }) }, log);
         if (n.code !== 0) throw new Error("npm install failed");
       }
     }

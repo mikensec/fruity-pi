@@ -89,6 +89,36 @@ async function main() {
   const llm = spawn(tsx, ["test/fake-llm.ts", String(LLM_PORT)], { stdio: "ignore" });
   procs.push(llm);
 
+  // A pre-existing, stand-alone pi install ("the user's own pi") with a real conversation.
+  const userPi = path.join(ROOT, "user-home", ".pi", "agent");
+  const userProj = path.join(ROOT, "user-project");
+  fs.mkdirSync(path.join(userPi, "skills", "my-own-skill"), { recursive: true });
+  fs.mkdirSync(userProj, { recursive: true });
+  fs.writeFileSync(path.join(userPi, "skills", "my-own-skill", "SKILL.md"), "---\nname: my-own-skill\ndescription: mine\n---\nmine\n");
+  fs.writeFileSync(path.join(userPi, "AGENTS.md"), "Always be concise.\n");
+  fs.writeFileSync(path.join(userPi, "models.json"), JSON.stringify({ providers: { fake: { baseUrl: `http://127.0.0.1:${LLM_PORT}/v1`, api: "openai-completions", apiKey: "x", models: [{ id: "fake-model" }] } } }));
+  fs.writeFileSync(path.join(userPi, "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model" }));
+  await waitFor("fake llm", () => fetch(`http://127.0.0.1:${LLM_PORT}/stats`).then((r) => r.ok));
+  execFileSync(process.execPath, [path.resolve("node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"), "-p", "remember the word mango"], {
+    cwd: userProj,
+    env: { ...process.env, HOME: path.join(ROOT, "user-home"), PI_CODING_AGENT_DIR: userPi, PI_OFFLINE: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const snapshot = (dir: string) => {
+    const out: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory()) walk(f);
+        else out.push(`${path.relative(dir, f)}:${fs.statSync(f).mtimeMs}:${fs.readFileSync(f).toString("base64")}`);
+      }
+    };
+    walk(dir);
+    return out.sort().join("\n");
+  };
+  const userPiBefore = snapshot(userPi);
+  env.PI_CODING_AGENT_DIR = userPi; // the server sees the user's pi exactly like a normal login shell would
+
   // Config + password
   execFileSync(tsx, ["src/cli.ts", "init", "--password", "e2e-password-123"], { env });
   const cfgPath = path.join(HOME, "config.json");
@@ -205,6 +235,7 @@ async function main() {
     ["POST", "/api/system/shell", { enabled: true, password: "e2e-password-123" }],
     ["POST", "/api/system/secrets", { X: "y" }],
     ["POST", "/api/system/settings", { maxConcurrent: 1 }],
+    ["GET", "/api/import/sessions", undefined],
   ] as const)
     assert.equal((await as(full, m, r, b)).status, 403, `${r} is human-only`);
   assert.equal((await as(read, "POST", "/api/send", { selector: "all", action: "abort" })).status, 403, "read token can't act");
@@ -258,6 +289,30 @@ async function main() {
   await waitJob((await api("PUT", "/api/deployments", { yaml: yaml2, apply: true })).job.id);
   await allIdle(3);
   log("scale down ok");
+
+  // ---- import an existing pi setup + session; the original must stay untouched
+  const setup = await api("GET", "/api/import/setup");
+  assert.equal(setup.exists, true);
+  assert.ok(setup.skills.some((x: string) => x.endsWith("my-own-skill")));
+  assert.equal(setup.sessions, 1);
+  const imp = await api("POST", "/api/import/setup", { id: "mine" });
+  assert.equal(imp.profile.model, "fake/fake-model");
+  const sess = await api("GET", "/api/import/sessions");
+  assert.equal(sess.sessions.length, 1);
+  assert.match(sess.sessions[0].firstPrompt, /remember the word mango/);
+  await waitJob((await api("POST", "/api/import/session", { file: sess.sessions[0].file, profile: "mine", name: "resumed", cwd: "original" })).job.id);
+  await waitFor("imported instance idle", async () => (await instances()).find((i) => i.name === "resumed")?.status === "idle");
+  const rs = await api("GET", "/api/instances/resumed/state");
+  assert.ok(rs.messageCount >= 2, `imported conversation continued (messageCount=${rs.messageCount})`);
+  const ans = await api("POST", "/api/send", { selector: "resumed", action: "prompt", message: "what word?", wait: true, timeout: 60 });
+  assert.match(ans.results[0].text, /ECHO: what word\? \| SKILLS: my-own-skill/);
+  assert.equal((await api("GET", "/api/instances/resumed")).instance.cwd, userProj, "kept the original project folder");
+  // a path outside the pi sessions dir is refused
+  await assert.rejects(api("POST", "/api/import/session", { file: path.join(userPi, "settings.json"), profile: "mine", name: "evil" }));
+  assert.equal(snapshot(userPi), userPiBefore, "the user's own pi dir is byte-for-byte unchanged");
+  await api("POST", "/api/instances/resumed/delete");
+  assert.equal(snapshot(userPi), userPiBefore, "still unchanged after deleting the imported instance");
+  log("import from existing pi ok (original untouched)");
 
   // ---- secrets redaction
   await api("POST", "/api/system/secrets", { MY_TEST_API_KEY: "zz-secret-value-4242" });

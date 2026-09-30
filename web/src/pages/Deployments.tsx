@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import YAML from "yaml";
 import { get, post, put, del } from "../api";
 import { useAppState } from "../store";
-import { Modal, Empty, JobLog, toast, toastError, useConfirm, timeAgo, Seg } from "../ui";
+import { Modal, Empty, JobLog, toast, toastError, useConfirm, timeAgo, Seg, FieldLabel, Help } from "../ui";
 import type { Deployment, PlanStep } from "../types";
 
 interface Group {
@@ -109,12 +109,18 @@ export function Deployments() {
                   <table className="tbl">
                     <thead>
                       <tr>
-                        <th>Cluster</th>
+                        <th>
+                          Cluster <Help topic="cluster" />
+                        </th>
                         <th>Profile</th>
                         <th>Model</th>
-                        <th>Working dir</th>
+                        <th>
+                          Working dir <Help topic="cwd" />
+                        </th>
                         <th>Health</th>
-                        <th style={{ width: 170 }}>Replicas</th>
+                        <th style={{ width: 170 }}>
+                          Replicas <Help topic="replicas" />
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -138,7 +144,12 @@ export function Deployments() {
                             <td className="mono small">{g.model ?? <span className="muted">profile default</span>}</td>
                             <td className="mono small">
                               {g.cwd ?? <span className="muted">private</span>}
-                              {g.worktree && <span className="badge grape" style={{ marginLeft: 6 }}>worktree</span>}
+                              {g.worktree && (
+                                <>
+                                  <span className="badge grape" style={{ marginLeft: 6 }}>worktree</span>
+                                  <Help topic="worktree" />
+                                </>
+                              )}
                             </td>
                             <td>
                               <span className={`badge ${healthy === g.replicas ? "kiwi" : "mango"}`}>
@@ -252,7 +263,7 @@ function Editor({ initial, onClose, onApplied }: { initial: string; onClose: () 
         />
         {parsed && mode === "form" && (
           <label className="field row nowrap" style={{ flexDirection: "row", alignItems: "center" }}>
-            Name
+            <FieldLabel text="Name" help="deploymentName" />
             <input
               className="mono-input"
               style={{ width: 220 }}
@@ -272,13 +283,13 @@ function Editor({ initial, onClose, onApplied }: { initial: string; onClose: () 
           {parsed && mode === "form" ? (
             <div className="col">
               {parsed.groups.map((g, i) => (
-                <div key={i} className="card card-b" style={{ boxShadow: "none", display: "grid", gridTemplateColumns: "1fr 1fr 110px", gap: 10, alignItems: "end" }}>
+                <div key={i} className="card card-b" style={{ boxShadow: "none", display: "grid", gridTemplateColumns: "1fr 1fr 150px", gap: 10, alignItems: "end" }}>
                   <label className="field">
-                    Cluster
+                    <FieldLabel text="Cluster" help="cluster" />
                     <input className="mono-input" value={g.cluster ?? ""} onChange={(e) => setGroups((gs) => gs.map((x, j) => (j === i ? { ...x, cluster: e.target.value.toLowerCase() } : x)))} />
                   </label>
                   <label className="field">
-                    Profile
+                    <FieldLabel text="Profile" help="profileId" />
                     <select value={g.profile} onChange={(e) => setGroups((gs) => gs.map((x, j) => (j === i ? { ...x, profile: e.target.value } : x)))}>
                       {state.profiles.map((p) => (
                         <option key={p.id}>{p.id}</option>
@@ -286,21 +297,22 @@ function Editor({ initial, onClose, onApplied }: { initial: string; onClose: () 
                     </select>
                   </label>
                   <label className="field">
-                    Replicas
+                    <FieldLabel text="Replicas" help="replicas" />
                     <input type="number" min={0} max={200} value={g.replicas} onChange={(e) => setGroups((gs) => gs.map((x, j) => (j === i ? { ...x, replicas: Number(e.target.value) } : x)))} />
                   </label>
                   <label className="field">
-                    Model override
+                    <FieldLabel text="Model override" help="modelOverride" />
                     <input className="mono-input" placeholder="profile default" value={g.model ?? ""} onChange={(e) => setGroups((gs) => gs.map((x, j) => (j === i ? { ...x, model: e.target.value } : x)))} />
                   </label>
                   <label className="field">
-                    Working dir
+                    <FieldLabel text="Working dir" help="cwd" />
                     <input className="mono-input" placeholder="private workspace" value={g.cwd ?? ""} onChange={(e) => setGroups((gs) => gs.map((x, j) => (j === i ? { ...x, cwd: e.target.value } : x)))} />
                   </label>
                   <div className="row nowrap" style={{ height: 34 }}>
-                    <label className="row nowrap small" title="One git worktree per replica">
+                    <label className="row nowrap small" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
                       <input type="checkbox" checked={!!g.worktree} onChange={(e) => setGroups((gs) => gs.map((x, j) => (j === i ? { ...x, worktree: e.target.checked } : x)))} /> worktree
                     </label>
+                    <Help topic="worktree" />
                     <button className="btn sm ghost icon" title="Remove group" onClick={() => setGroups((gs) => gs.filter((_, j) => j !== i))}>
                       🗑
                     </button>
@@ -319,7 +331,9 @@ function Editor({ initial, onClose, onApplied }: { initial: string; onClose: () 
           )}
         </div>
         <div className="col">
-          <p className="section-title">Plan preview</p>
+          <p className="section-title">
+            Plan preview <Help topic="plan" />
+          </p>
           {plan.error && <div className="notice err">{plan.error}</div>}
           {!plan.error && !steps.length && <div className="notice ok">No changes — running instances already match.</div>}
           <div className="col" style={{ gap: 6, maxHeight: 440, overflow: "auto" }}>

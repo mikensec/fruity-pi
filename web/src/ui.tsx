@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { HELP, type HelpKey } from "./help";
 import { useStore, seedJobLog } from "./store";
 import { get } from "./api";
 import type { Status } from "./types";
@@ -327,4 +328,96 @@ export function Markdown({ text }: { text: string }) {
     blocks.push(<p key={key++}>{inline(para.join(" "), key)}</p>);
   }
   return <div className="md">{blocks}</div>;
+}
+
+// ---------------------------------------------------------------- help popovers
+
+/**
+ * A small "?" button that toggles an explanation. Works inside <label>s (doesn't
+ * steal the click), closes on outside click / Esc / scroll, and positions itself
+ * inside the viewport so it never causes horizontal scrolling.
+ */
+export function Help({ topic }: { topic: HelpKey }) {
+  const h = HELP[topic] as { title: string; body: string; example?: string };
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number; up: boolean } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !btn.current) return;
+    const r = btn.current.getBoundingClientRect();
+    const width = Math.min(340, window.innerWidth - 24);
+    const left = Math.max(12, Math.min(r.left + r.width / 2 - width / 2, window.innerWidth - width - 12));
+    const up = r.bottom + 220 > window.innerHeight && r.top > 240;
+    setPos({ top: up ? r.top - 8 : r.bottom + 8, left, up });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e.type === "keydown" && (e as KeyboardEvent).key !== "Escape") return;
+      if (e.type === "mousedown" && (pop.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node))) return;
+      if (e.type === "keydown") e.stopPropagation(); // don't also close the surrounding modal
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close, true);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close, true);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  return (
+    <span className="help">
+      <button
+        ref={btn}
+        type="button"
+        className={`help-btn ${open ? "on" : ""}`}
+        aria-label={`Help: ${h.title}`}
+        aria-expanded={open}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+      >
+        ?
+      </button>
+      {open && pos && (
+        <div
+          ref={pop}
+          role="dialog"
+          aria-label={h.title}
+          className={`help-pop ${pos.up ? "up" : ""}`}
+          style={{ top: pos.top, left: pos.left, width: Math.min(340, window.innerWidth - 24) }}
+          onClick={(e) => {
+            // Inside a <label>, a click would otherwise focus/toggle the labelled control.
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          <strong>{h.title}</strong>
+          <p>{h.body}</p>
+          {h.example && <code>{h.example}</code>}
+        </div>
+      )}
+    </span>
+  );
+}
+
+/** A form label with an optional inline hint and "?" help. */
+export function FieldLabel({ text, hint, help }: { text: ReactNode; hint?: ReactNode; help?: HelpKey }) {
+  return (
+    <span className="field-label">
+      <span>{text}</span>
+      {help && <Help topic={help} />}
+      {hint && <span className="hint">{hint}</span>}
+    </span>
+  );
 }

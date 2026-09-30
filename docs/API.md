@@ -18,7 +18,7 @@ Token scopes:
 - **read**: `GET` endpoints, plus `POST /api/collect`, `/api/resolve`, `/api/deployments/plan` and `/api/packages/preview`.
 
 **Human-only** (API tokens get `403`):
-- `/api/tokens*`
+- `/api/tokens*`, `/api/import/*`
 - `/api/system/{secrets,shell,password,totp/*,webhook,upgrade-pi,settings,cleanup}`
 - `/api/auth/*` (except the public ones)
 - the web shell (`/ws/shell`)
@@ -209,6 +209,17 @@ Updates roll two instances at a time. Each waits for its in-flight run to settle
 }
 ```
 `scope.kind = "profile"` edits the profile, so current and future instances get the change. The other kinds add instance-level overrides.
+
+## Import from an existing pi (interactive login only)
+
+Reads an existing stand-alone pi install (default `~/.pi/agent`; pass `dir` to scan another). The source is never modified; everything is copied.
+
+| | |
+|---|---|
+| `GET /api/import/setup?dir=` | summary: model, skills, extensions, prompts, AGENTS.md, models.json, session count |
+| `POST /api/import/setup` | `{id, dir?}` → snapshot into `~/.fruity-pi/imports/<id>` and create profile `<id>` |
+| `GET /api/import/sessions?dir=` | `{sessions: [{file, id, cwd, messages, firstPrompt, lastPrompt, updatedAt, …}]}` |
+| `POST /api/import/session` | `{file, profile, name?, cwd?: "original" \| "private" \| "/path", start?}` → `{job}`; copies the session into a new instance that continues it |
 
 ## System (read-only for tokens)
 

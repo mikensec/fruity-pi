@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post, put, del } from "../api";
 import { useAppState } from "../store";
-import { Modal, Empty, JobLog, toastError, useConfirm, timeAgo, useTick, Seg, copy } from "../ui";
+import { Modal, Empty, JobLog, toastError, useConfirm, timeAgo, useTick, Seg, copy, FieldLabel, Help } from "../ui";
 import type { Repo } from "../types";
 
 export function Repos() {
@@ -194,16 +194,16 @@ function RepoForm({ repo, onClose, onJob }: { repo?: Repo; onClose: () => void; 
       }
     >
       <label className="field">
-        Repository
+        <FieldLabel text="Repository" help="repoUrl" />
         <input className="mono-input" value={f.url} disabled={!!repo} onChange={(e) => set("url", e.target.value)} placeholder="github.com/owner/skills  ·  git@github.com:owner/private.git" autoFocus />
       </label>
       <div className="grid2">
         <label className="field">
-          Branch, tag or commit
+          <FieldLabel text="Branch, tag or commit" help="repoRef" />
           <input className="mono-input" value={f.ref} onChange={(e) => set("ref", e.target.value)} />
         </label>
         <div className="field">
-          Mode
+          <FieldLabel text="Mode" help="repoMode" />
           <Seg
             value={f.mode}
             onChange={(v) => set("mode", v)}
@@ -214,11 +214,11 @@ function RepoForm({ repo, onClose, onJob }: { repo?: Repo; onClose: () => void; 
           />
         </div>
         <label className="field">
-          Poll every (seconds)
+          <FieldLabel text="Poll every (seconds)" help="pollSeconds" />
           <input type="number" min={30} value={f.pollSeconds} onChange={(e) => set("pollSeconds", Number(e.target.value))} disabled={f.mode === "pinned"} />
         </label>
         <label className="field">
-          Subdirectory <span className="hint">if the package lives below the repo root</span>
+          <FieldLabel text="Subdirectory" help="subdir" hint="optional" />
           <input className="mono-input" value={f.subdir} onChange={(e) => set("subdir", e.target.value)} placeholder="(repo root)" />
         </label>
         {!repo && (
@@ -229,7 +229,7 @@ function RepoForm({ repo, onClose, onJob }: { repo?: Repo; onClose: () => void; 
         )}
       </div>
       <div className="notice info small">
-        Repos with a <span className="mono">package.json</span> "pi" manifest or <span className="mono">skills/ extensions/ prompts/ themes/</span> folders load as a pi package; anything else is scanned for <span className="mono">SKILL.md</span> files. Private repos use this machine's git credentials / SSH agent.
+        Private repo? Add <span className="mono">GITHUB_TOKEN</span> (or <span className="mono">GITLAB_TOKEN</span> / <span className="mono">FRUITY_PI_GIT_TOKENS</span>) in <a href="#/system">System → Secrets</a> <Help topic="privateRepos" />. Repos with a <span className="mono">package.json</span> "pi" manifest or <span className="mono">skills/ extensions/ prompts/ themes/</span> folders load as a pi package; anything else is scanned for <span className="mono">SKILL.md</span> files. Private repos use this machine's git credentials / SSH agent.
       </div>
     </Modal>
   );
@@ -243,6 +243,7 @@ function Webhook({ configured }: { configured: boolean }) {
     <div className="card">
       <div className="card-h">
         <h3>Instant updates via GitHub webhook</h3>
+        <Help topic="webhook" />
         <span className={`badge ${configured ? "kiwi" : ""}`}>{configured ? "configured" : "optional"}</span>
       </div>
       <div className="card-b col">

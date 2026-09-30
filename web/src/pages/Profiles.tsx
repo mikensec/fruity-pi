@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post, put, del } from "../api";
 import { useAppState } from "../store";
-import { Modal, Empty, JobLog, Switch, toast, toastError, useConfirm } from "../ui";
+import { Modal, Empty, JobLog, Switch, toast, toastError, useConfirm, FieldLabel, Help } from "../ui";
 import type { PackageEntry, Profile } from "../types";
 
 const src = (p: PackageEntry) => (typeof p === "string" ? p : p.source);
@@ -173,19 +173,19 @@ function ProfileEditor({ initial, isNew, onClose, onSaved }: { initial: Profile;
     >
       <div className="grid2">
         <label className="field">
-          Profile id
+          <FieldLabel text="Profile id" help="profileId" />
           <input className="mono-input" value={p.id} disabled={!isNew} onChange={(e) => set("id", e.target.value.toLowerCase())} placeholder="code-review" />
         </label>
         <label className="field">
-          Description
+          <FieldLabel text="Description" />
           <input value={p.description ?? ""} onChange={(e) => set("description", e.target.value)} />
         </label>
         <label className="field">
-          Model <span className="hint">provider/model[:thinking], e.g. anthropic/claude-sonnet-5-5</span>
+          <FieldLabel text="Model" help="model" hint="provider/model-id" />
           <input className="mono-input" value={p.model ?? ""} onChange={(e) => set("model", e.target.value || undefined)} placeholder="pi default" />
         </label>
         <label className="field">
-          Thinking level
+          <FieldLabel text="Thinking level" help="thinking" />
           <select value={p.thinking ?? ""} onChange={(e) => set("thinking", e.target.value || undefined)}>
             <option value="">default</option>
             {["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((l) => (
@@ -194,14 +194,15 @@ function ProfileEditor({ initial, isNew, onClose, onSaved }: { initial: Profile;
           </select>
         </label>
         <label className="field">
-          Tools allowlist <span className="hint">comma-separated; blank = pi defaults</span>
+          <FieldLabel text="Tools allowlist" help="tools" hint="blank = pi defaults" />
           <input className="mono-input" value={p.tools ?? ""} onChange={(e) => set("tools", e.target.value || undefined)} placeholder="read,bash,edit,write" />
         </label>
         <div className="field" style={{ justifyContent: "flex-end" }}>
           <div className="row nowrap">
             <Switch checked={!!p.approve} onChange={(v) => set("approve", v)} />
-            <span>
-              Trust project files (<span className="mono">pi -a</span>)<br />
+            <span className="grow">
+              <FieldLabel text={<>Trust project files (<span className="mono">pi -a</span>)</>} help="approve" />
+              <br />
               <span className="muted tiny">Loads .pi/ settings, packages & skills from the working directory.</span>
             </span>
           </div>
@@ -209,7 +210,9 @@ function ProfileEditor({ initial, isNew, onClose, onSaved }: { initial: Profile;
       </div>
 
       <div className="col">
-        <p className="section-title">Tracked skill repos · auto-update</p>
+        <p className="section-title">
+          Tracked skill repos · auto-update <Help topic="trackedRepos" />
+        </p>
         {!state.repos.length ? (
           <div className="muted small">
             No tracked repos yet — <a href="#/repos">track a GitHub repo</a> and every instance using this profile updates when it changes.
@@ -230,7 +233,9 @@ function ProfileEditor({ initial, isNew, onClose, onSaved }: { initial: Profile;
       </div>
 
       <div className="col">
-        <p className="section-title">pi packages</p>
+        <p className="section-title">
+          pi packages <Help topic="packages" />
+        </p>
         {p.packages.map((x, i) => (
           <div key={i} className="res">
             <span className="mono small grow ellipsis">{src(x)}</span>
@@ -271,24 +276,24 @@ function ProfileEditor({ initial, isNew, onClose, onSaved }: { initial: Profile;
 
       <div className="grid2">
         <label className="field">
-          Local skill paths <span className="hint">one per line</span>
+          <FieldLabel text="Local skill paths" help="skillPaths" hint="one per line" />
           <textarea className="mono-input" value={p.skills.join("\n")} onChange={(e) => set("skills", e.target.value.split("\n"))} placeholder="~/skills/my-skill" />
         </label>
         <label className="field">
-          Environment <span className="hint">KEY=value per line (API keys belong in System → Secrets)</span>
+          <FieldLabel text="Environment" help="env" hint="KEY=value per line" />
           <textarea className="mono-input" value={envText} onChange={(e) => setEnvText(e.target.value)} placeholder="MY_FLAG=1" />
         </label>
         <label className="field">
-          Append to system prompt
+          <FieldLabel text="Append to system prompt" help="appendSystemPrompt" />
           <textarea value={p.appendSystemPrompt ?? ""} onChange={(e) => set("appendSystemPrompt", e.target.value || undefined)} />
         </label>
         <label className="field">
-          Extra CLI args <span className="hint">one per line</span>
+          <FieldLabel text="Extra CLI args" help="extraArgs" hint="one per line" />
           <textarea className="mono-input" value={p.extraArgs.join("\n")} onChange={(e) => set("extraArgs", e.target.value.split("\n"))} placeholder="--no-context-files" />
         </label>
       </div>
       <label className="field">
-        Custom models.json <span className="hint">optional — e.g. Ollama / any OpenAI-compatible endpoint</span>
+        <FieldLabel text="Custom models.json" help="modelsJson" hint="optional" />
         <textarea
           className="mono-input"
           style={{ minHeight: 90 }}

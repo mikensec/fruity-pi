@@ -131,10 +131,12 @@ export function maskedSecrets(): { key: string; preview: string }[] {
 
 let secretValues: string[] = [];
 export function refreshRedactor() {
-  const notSecret = /^(AWS_REGION|AWS_DEFAULT_REGION|AWS_PROFILE|FRUITY_PI_.*)$/;
+  const notSecret = /^(AWS_REGION|AWS_DEFAULT_REGION|AWS_PROFILE|FRUITY_PI_AWS_INSTANCE_ROLE)$/;
   secretValues = Object.entries(loadSecrets())
-    .filter(([k, v]) => v.length >= 8 && !notSecret.test(k))
-    .map(([, v]) => v)
+    .filter(([k]) => !notSecret.test(k))
+    // FRUITY_PI_GIT_TOKENS holds several "host=token" pairs: redact each token too.
+    .flatMap(([k, v]) => (k === "FRUITY_PI_GIT_TOKENS" ? [v, ...v.split(",").map((x) => x.split("=").slice(1).join("=").split(":").pop() ?? "")] : [v]))
+    .filter((v) => v.length >= 8)
     .sort((a, b) => b.length - a.length);
 }
 

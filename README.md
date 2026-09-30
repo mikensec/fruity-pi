@@ -9,7 +9,23 @@ Run a whole orchard of [pi](https://github.com/earendil-works/pi) coding agents 
 - **Package manager.** Search the pi package catalog, read READMEs, and see what a package contains (skills, extensions, prompts, themes) before installing. Install, update or remove per profile, cluster, deployment, instance or everything. A fleet-wide matrix shows what's installed where, and individual skills and extensions can be switched on or off.
 - **Web shell.** A terminal into the VM, or into any instance's isolated environment so `pi` there sees exactly what the instance sees. It's off by default and enabling it asks for your password. Every session is audit-logged.
 - **Concurrency cap.** Prompts beyond `maxConcurrent` queue automatically, so 50 instances don't hammer your rate limits.
+- **Plays nice with your existing pi.** Never touches `~/.pi`. **Import** your pi setup as a profile and continue any past conversation in an instance (copies, read-only).
+- **Private repos & packages.** GitHub/GitLab/any-host tokens and `NPM_TOKEN` from secrets, never written to disk.
+- **Built-in help.** Every non-obvious setting (worktrees, replicas, scopes, selectors…) has a `?` popover explaining it.
 - **Easy install.** `./install.sh` installs Node if needed, then pi, the build and a systemd user service. The in-browser setup checklist covers the rest.
+
+## Screenshots
+
+**Dashboard.** Fan a prompt out to a whole cluster and watch every agent answer side by side.
+![Dashboard with a live fan-out to cluster:reviewers](docs/screenshots/dashboard.png)
+
+| | |
+|---|---|
+| **Deployments.** Declare clusters, preview the plan, apply. Every setting has a `?` help popover. ![Deployment editor with plan preview and help popover](docs/screenshots/deployments.png) | **Instance.** Full transcript with tool calls. Steer, follow up, abort. ![Instance transcript](docs/screenshots/instance.png) |
+| **Packages.** Search the pi catalog, look inside, install to any scope. ![Package catalog](docs/screenshots/packages.png) | **Import from pi.** Bring your existing pi setup and conversations over, read-only. ![Import page](docs/screenshots/import.png) |
+
+**Tracked repos.** Skills that auto-update across the fleet.
+![Tracked repos](docs/screenshots/repos.png)
 
 ## For AI agents
 
@@ -68,6 +84,45 @@ Host pi-vm
   User you
   LocalForward 7777 127.0.0.1:7777
 ```
+
+## Works alongside your existing pi
+
+fruity-pi **never touches your own pi**:
+
+- Every instance runs with its own `HOME` and `PI_CODING_AGENT_DIR` under `~/.fruity-pi/instances/<name>/`, so its settings, packages, skills, logins and sessions all live there. Your `~/.pi/agent` and `~/.agents` are never read by instances or written to.
+- fruity-pi ships its own copy of pi (in `~/.fruity-pi/app`). An existing global `pi` install, and its version, are left alone.
+- You can keep running plain `pi` in a terminal while fruity-pi runs, including on the same machine and account.
+- The only things shared, read-only, are the conveniences you'd expect: your git identity/credential helpers (`~/.gitconfig`), `~/.aws`, `~/.npmrc` and your SSH keys, so agents can reach the same private repos and clouds you can.
+
+One thing to watch: if you point an instance's working directory at a project you're also editing with your own pi (or by hand), both will edit the same files. Use a private workspace or `worktree: true` for parallel work.
+
+The end-to-end test checks this directly. It creates a real stand-alone pi install with a conversation, imports it, runs and deletes instances, and asserts that every file of the original is byte-for-byte unchanged.
+
+## Import from an existing pi
+
+**Import from pi** in the sidebar scans `~/.pi/agent` (or any pi agent dir you point it at):
+
+- **Your pi setup → profile.** Skills (`~/.pi/agent/skills`, `~/.agents/skills`), extensions, prompt templates, `AGENTS.md`, `models.json`, packages and your default model/thinking level are **snapshotted** into `~/.fruity-pi/imports/<profile>/`. A profile is created that uses the snapshot, so later edits to your own pi don't change your agents, and vice versa. Logins in `auth.json` are not copied; add provider keys in **System → Secrets**.
+- **Sessions → instances.** Every past conversation is listed with its project folder and first prompt. **Import** copies the session file into a new instance and starts it, and the agent continues exactly where you left off. You choose the working directory: the session's **original project folder** (to keep working on those files), or a **private workspace** (the conversation, without access to the files).
+
+Your original session file stays where it is and remains usable with plain `pi --resume`.
+
+## Private repos & packages
+
+Tracked repos, `git:` packages and `npm:` packages can be private. There are two ways to give fruity-pi access:
+
+1. **Tokens in System → Secrets** (recommended; works headless, on EC2 and in containers):
+
+   | secret | used for |
+   |---|---|
+   | `GITHUB_TOKEN` (or `GH_TOKEN`) | `https://github.com/...`: a fine-grained or classic PAT with read access (Contents: read) |
+   | `GITLAB_TOKEN` | `https://gitlab.com/...` |
+   | `FRUITY_PI_GIT_TOKENS` | any other host: `git.corp.com=TOKEN,https://bitbucket.org=user:app-password,http://10.0.0.5:3000=TOKEN` |
+   | `NPM_TOKEN` | private/scoped packages on registry.npmjs.org |
+
+   Git receives the token through an environment-only credential helper, so it's **never written to disk** (not into `.git/config`, not into `~/.git-credentials`) and it's redacted from logs. The same credentials apply to the server (tracked repos, previews) and to every instance (`pi install`, and agents running `git clone`).
+
+2. **This machine's own git setup.** Your `~/.gitconfig` credential helpers (e.g. `gh auth setup-git`) and SSH keys are used when no token is configured. This works on a desktop session. It can fail headless, when the helper needs an unlocked keyring, or for SSH keys with a passphrase (no agent in a systemd service). Git never prompts; it fails fast with an error in the job log instead.
 
 ## Run in a container (Docker / Podman)
 

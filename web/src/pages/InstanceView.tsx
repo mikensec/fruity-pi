@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { get, post } from "../api";
 import { useAppState, useInstanceEvents } from "../store";
-import { StatusPill, toast, toastError, useConfirm, copy, fmtCost, timeAgo, JobLog, Empty } from "../ui";
+import { StatusPill, toast, toastError, useConfirm, copy, fmtCost, timeAgo, JobLog, Empty, Help, Markdown } from "../ui";
 import { InstancePackages } from "./Packages";
 
 interface Entry {
@@ -147,9 +147,10 @@ export function InstanceView({ id }: { id: string }) {
         <button className="btn" onClick={() => act("restart")}>
           Restart
         </button>
-        <button className="btn" onClick={() => act("reprovision")} title="Re-apply profile packages & settings, then restart">
+        <button className="btn" onClick={() => act("reprovision")}>
           Re-provision
         </button>
+        <Help topic="reprovision" />
         {state.config.shellEnabled && (
           <a className="btn" href={`#/shell/${encodeURIComponent(inst.id)}`}>
             ›_ Shell
@@ -163,6 +164,7 @@ export function InstanceView({ id }: { id: string }) {
         {inst.lastError && inst.status === "error" && <div className="notice err">{inst.lastError}</div>}
         {(inst.configDrift || inst.repoDrift) && (
           <div className="notice warn">
+            <Help topic="drift" />
             <span>
               This instance is running an older config{inst.repoDrift ? " / tracked-repo commit" : ""}.{" "}
               {inst.pendingRestart ? "It will update after the current run settles." : "Re-provision to update it."}
@@ -322,7 +324,11 @@ function EntryView({ e }: { e: Entry }) {
             <pre className="thinking">{e.thinking}</pre>
           </details>
         )}
-        {e.text && <div className="bubble">{e.text}</div>}
+        {e.text && (
+          <div className="bubble md-bubble">
+            <Markdown text={e.text} />
+          </div>
+        )}
       </div>
     );
   if (e.kind === "tool") {

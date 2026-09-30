@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { APP_DIR, instancePaths, paths } from "./paths.js";
 import { loadConfig, loadSecrets, redact } from "./config.js";
+import { applyGitAuth, applyNpmAuth } from "./credentials.js";
 import type { Instance, Profile } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -122,6 +123,21 @@ export function instanceEnv(inst: Pick<Instance, "id">, profile?: Pick<Profile, 
   // Let git in instances use the operator's git identity/credential helpers for private repos.
   if (fs.existsSync(realGitConfig) && !env.GIT_CONFIG_GLOBAL) env.GIT_CONFIG_GLOBAL = realGitConfig;
   applyAwsConfig(env);
+  const secrets = loadSecrets();
+  applyGitAuth(env, secrets);
+  applyNpmAuth(env, secrets);
+  return env;
+}
+
+/**
+ * Environment for fruity-pi's own git/npm calls (tracked repos, previews, pi upgrades):
+ * the server's env plus private-repo credentials from secrets, never interactive.
+ */
+export function toolEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env = { ...(process.env as Record<string, string>), ...extra };
+  const secrets = loadSecrets();
+  applyGitAuth(env, secrets);
+  applyNpmAuth(env, secrets);
   return env;
 }
 

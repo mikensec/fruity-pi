@@ -106,6 +106,72 @@ test("proxy + custom CA variables reach instances; loopback/IMDS bypass the prox
   assert.equal(instanceEnv({ id: "p1" }).NODE_USE_ENV_PROXY, undefined);
 });
 
+test("private git repos: token from secrets authenticates, missing token fails fast", async () => {
+  const { spawn, execFileSync } = await import("node:child_process");
+  const http = await import("node:http");
+  const { applyGitAuth } = await import("../src/credentials.js");
+  const { runCommand } = await import("../src/pi.js");
+  // Bare repo served by `git http-backend` behind HTTP basic auth (like a private GitHub repo).
+  const root = fs.mkdtempSync(path.join(TMP, "git-"));
+  const work = path.join(root, "work");
+  execFileSync("git", ["init", "-q", "-b", "main", work]);
+  fs.writeFileSync(path.join(work, "SKILL.md"), "---\nname: secret-skill\n---\n");
+  execFileSync("git", ["-C", work, "add", "."]);
+  execFileSync("git", ["-C", work, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+  execFileSync("git", ["clone", "-q", "--bare", work, path.join(root, "private.git")]);
+  const TOKEN = "tok_private_repo_123";
+  const server = http.createServer((req, res) => {
+    const auth = Buffer.from((req.headers.authorization ?? "").replace(/^Basic /, ""), "base64").toString();
+    if (auth.split(":")[1] !== TOKEN) {
+      res.writeHead(401, { "www-authenticate": 'Basic realm="private"' }).end();
+      return;
+    }
+    const u = new URL(req.url!, "http://x");
+    const cgi = spawn("git", ["http-backend"], {
+      env: { ...process.env, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: "1", PATH_INFO: u.pathname, QUERY_STRING: u.search.slice(1), REQUEST_METHOD: req.method!, CONTENT_TYPE: req.headers["content-type"] ?? "", REMOTE_USER: "x" },
+    });
+    req.pipe(cgi.stdin);
+    let buf = Buffer.alloc(0);
+    let headersDone = false;
+    cgi.stdout.on("data", (d: Buffer) => {
+      if (headersDone) return void res.write(d);
+      buf = Buffer.concat([buf, d]);
+      const i = buf.indexOf("\r\n\r\n");
+      if (i < 0) return;
+      headersDone = true;
+      const headers: Record<string, string> = {};
+      let status = 200;
+      for (const line of buf.subarray(0, i).toString().split("\r\n")) {
+        const [k, ...v] = line.split(":");
+        if (k.toLowerCase() === "status") status = parseInt(v.join(":"));
+        else headers[k] = v.join(":").trim();
+      }
+      res.writeHead(status, headers);
+      res.write(buf.subarray(i + 4));
+    });
+    cgi.stdout.on("end", () => res.end());
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const url = `http://127.0.0.1:${(server.address() as any).port}/private.git`;
+  try {
+    const base = { PATH: process.env.PATH!, HOME: TMP };
+    const denied = await runCommand("git", ["ls-remote", url], { env: applyGitAuth({ ...base }, {}), timeoutMs: 20_000 });
+    assert.notEqual(denied.code, 0, "no token → access denied");
+    const secrets = { FRUITY_PI_GIT_TOKENS: `${url.replace(/\/private\.git$/, "")}=${TOKEN}` };
+    const ok = await runCommand("git", ["clone", "-q", url, path.join(root, "clone")], { env: applyGitAuth({ ...base }, secrets), timeoutMs: 20_000 });
+    assert.equal(ok.code, 0, ok.output);
+    assert.ok(fs.existsSync(path.join(root, "clone", "SKILL.md")));
+    // The token never lands in git config on disk.
+    assert.ok(!fs.readFileSync(path.join(root, "clone", ".git", "config"), "utf8").includes(TOKEN));
+    // …and each token inside FRUITY_PI_GIT_TOKENS is redacted from logs.
+    saveSecrets(secrets);
+    assert.equal(redact(`auth ${TOKEN}`), "auth [REDACTED]");
+    saveSecrets({ FRUITY_PI_GIT_TOKENS: null });
+  } finally {
+    server.close();
+  }
+});
+
 test("package identity ignores version/ref", () => {
   assert.equal(packageIdentity("npm:@foo/bar@1.2.3"), "npm:@foo/bar");
   assert.equal(packageIdentity("npm:bar"), "npm:bar");

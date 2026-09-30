@@ -117,7 +117,10 @@ input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--straw); 
 label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-2); font-weight: 500; }
 label.field .hint { color: var(--text-3); font-weight: 400; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.row.nowrap { flex-wrap: nowrap; }
+/* "row nowrap" = a flex row that doesn't wrap its items; the text inside still wraps. */
+.row.nowrap { flex-wrap: nowrap; white-space: normal; }
+.row.nowrap > * { min-width: 0; }
+.row.nowrap > .btn, .row.nowrap > .badge, .row.nowrap > .switch, .row.nowrap > .kbd, .row.nowrap > .help { flex-shrink: 0; }
 .grow { flex: 1; min-width: 0; }
 .col { display: flex; flex-direction: column; gap: 10px; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
@@ -199,7 +202,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 
 /* ---------- modal / drawer / toast ---------- */
 .overlay { position: fixed; inset: 0; background: rgba(5, 4, 8, 0.65); backdrop-filter: blur(3px); z-index: 50; display: grid; place-items: center; padding: 20px; animation: fade 0.12s; }
-.modal { width: min(640px, 100%); max-height: calc(100vh - 40px); overflow: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 16px; box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8); animation: pop 0.14s; }
+.modal { width: min(640px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; overflow-x: hidden; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 16px; box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8); animation: pop 0.14s; }
 .modal.wide { width: min(1100px, 100%); }
 .modal-h { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); z-index: 1; }
 .modal-h h2 { margin: 0; font-size: 16px; }
@@ -338,3 +341,37 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   .nav-sep, .sidebar-foot { display: none; }
   .page, .topbar { padding-left: 16px; padding-right: 16px; }
 }
+
+/* ---------- help popovers ---------- */
+.help { display: inline-flex; vertical-align: middle; }
+.help-btn {
+  width: 16px; height: 16px; border-radius: 50%; padding: 0; margin: 0 2px;
+  display: inline-grid; place-items: center; cursor: pointer;
+  font: 700 10px/1 var(--sans); color: var(--text-3);
+  background: var(--surface-3); border: 1px solid var(--border-strong);
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.help-btn:hover, .help-btn.on { color: #1c0d12; background: var(--mango); border-color: var(--mango); }
+.help-btn:focus-visible { outline: 2px solid var(--straw); outline-offset: 2px; }
+.help-pop {
+  position: fixed; z-index: 200; box-sizing: border-box;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-left: 3px solid var(--mango);
+  border-radius: 10px; padding: 12px 14px; box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.8);
+  font: 400 13px/1.55 var(--sans); color: var(--text-2); text-transform: none; letter-spacing: 0;
+  white-space: normal; text-align: left; animation: pop 0.12s;
+}
+.help-pop.up { transform: translateY(-100%); animation: none; }
+.help-pop strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 4px; }
+.help-pop p { margin: 0; }
+.help-pop code { display: block; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-2); color: var(--kiwi); font-size: 11.5px; white-space: normal; word-break: break-word; }
+.field-label { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.field-label .hint { color: var(--text-3); font-weight: 400; margin-left: 2px; }
+
+/* assistant answers rendered as markdown */
+.bubble.md-bubble { white-space: normal; }
+.md-bubble .md { color: var(--text); }
+.md-bubble .md > :first-child { margin-top: 0; }
+.md-bubble .md > :last-child { margin-bottom: 0; }
+.md-bubble .md p { margin: 0.5em 0; }
+.md-bubble .md ul, .md-bubble .md ol { margin: 0.4em 0; }
+.fan-col-b .md p { margin: 0.4em 0; }

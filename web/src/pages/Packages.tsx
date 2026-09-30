@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { get, post } from "../api";
 import { useAppState } from "../store";
-import { Drawer, Modal, Empty, JobLog, Markdown, Switch, toast, toastError, timeAgo, Spinner } from "../ui";
+import { Drawer, Modal, Empty, JobLog, Markdown, Switch, toast, toastError, timeAgo, Spinner, Help } from "../ui";
 import { resolveSelector } from "../selectors";
 
 type ScopeKind = "profile" | "cluster" | "deployment" | "instance" | "all";
@@ -139,7 +139,9 @@ function InstallPanel({ source, runsCode, onJob, onDone, verb = "install" }: { s
   };
   return (
     <div className="col" style={{ gap: 8 }}>
-      <p className="section-title">{verb === "install" ? "Install to" : verb === "remove" ? "Remove from" : "Update on"}</p>
+      <p className="section-title">
+        {verb === "install" ? "Install to" : verb === "remove" ? "Remove from" : "Update on"} <Help topic="scope" />
+      </p>
       <ScopePicker scope={scope} onChange={setScope} />
       <div className="row">
         <span className="muted small">
@@ -289,7 +291,12 @@ function PackageDrawer({ name, onClose, onJob }: { name: string; onClose: () => 
           <div className="row">
             <span className="badge">v{info.version}</span>
             {info.license && <span className="badge">{info.license}</span>}
-            {runsCode && <span className="badge mango">⚡ runs code</span>}
+            {runsCode && (
+              <>
+                <span className="badge mango">⚡ runs code</span>
+                <Help topic="runsCode" />
+              </>
+            )}
             {info.homepage && (
               <a href={info.homepage} target="_blank" rel="noreferrer" className="small">
                 homepage ↗

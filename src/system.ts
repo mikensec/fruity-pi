@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { APP_DIR, paths } from "./paths.js";
-import { runCommand, piVersion, piCommand } from "./pi.js";
+import { runCommand, piVersion, piCommand, toolEnv } from "./pi.js";
 import { loadSecrets, safeConfig, maskedSecrets } from "./config.js";
 import { store } from "./store.js";
 import { startJob } from "./jobs.js";
@@ -16,6 +16,8 @@ async function version(cmd: string, args: string[], timeoutMs = 10_000) {
 
 const PROVIDER_KEYS = [
   "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "AI_GATEWAY_API_KEY",
+  // Private git repos / npm packages
+  "GITHUB_TOKEN", "GITLAB_TOKEN", "FRUITY_PI_GIT_TOKENS", "NPM_TOKEN",
   // Amazon Bedrock
   "AWS_REGION", "FRUITY_PI_AWS_INSTANCE_ROLE", "AWS_BEARER_TOKEN_BEDROCK", "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
 ];
@@ -69,7 +71,7 @@ export async function systemStatus() {
 }
 
 export async function latestPiVersion(): Promise<string | undefined> {
-  const r = await runCommand("npm", ["view", "@earendil-works/pi-coding-agent", "version"], { timeoutMs: 20_000 });
+  const r = await runCommand("npm", ["view", "@earendil-works/pi-coding-agent", "version"], { timeoutMs: 20_000, env: toolEnv() });
   return r.code === 0 ? r.output.trim() : undefined;
 }
 
@@ -83,7 +85,7 @@ export function upgradePi(targetVersion = "latest", ip?: string) {
     const r = await runCommand(
       "npm",
       ["install", `@earendil-works/pi-coding-agent@${targetVersion}`, "--save", "--no-audit", "--no-fund"],
-      { cwd: APP_DIR, timeoutMs: 600_000 },
+      { cwd: APP_DIR, timeoutMs: 600_000, env: toolEnv() },
       ctx.log,
     );
     if (r.code !== 0) throw new Error("npm install failed");

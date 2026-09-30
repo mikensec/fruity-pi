@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { instancePaths, ensureDir, expandHome, paths, repoPaths } from "./paths.js";
-import { runPi, runCommand } from "./pi.js";
+import { runPi, runCommand, toolEnv } from "./pi.js";
 import { store } from "./store.js";
 import { isRemoteSource, packageIdentity, packageSource } from "./profiles.js";
 import type { Instance, PackageEntry, Profile, Repo } from "./types.js";
@@ -345,7 +345,7 @@ export async function previewSource(source: string) {
   try {
     let dir = tmp;
     if (source.startsWith("npm:")) {
-      const r = await runCommand("npm", ["pack", source.slice(4), "--silent", "--pack-destination", tmp], { cwd: tmp, timeoutMs: 120_000 });
+      const r = await runCommand("npm", ["pack", source.slice(4), "--silent", "--pack-destination", tmp], { cwd: tmp, timeoutMs: 120_000, env: toolEnv() });
       const tgz = fs.readdirSync(tmp).find((f) => f.endsWith(".tgz"));
       if (r.code !== 0 || !tgz) throw new Error(`npm pack failed: ${r.output.slice(-400)}`);
       await runCommand("tar", ["-xzf", tgz], { cwd: tmp });
@@ -353,7 +353,7 @@ export async function previewSource(source: string) {
     } else if (isRemoteSource(source)) {
       const { url, ref } = gitUrlAndRef(source);
       const args = ["clone", "--depth", "1", ...(ref ? ["--branch", ref] : []), url, path.join(tmp, "repo")];
-      const r = await runCommand("git", args, { timeoutMs: 120_000, env: { ...(process.env as Record<string, string>), GIT_TERMINAL_PROMPT: "0" } });
+      const r = await runCommand("git", args, { timeoutMs: 120_000, env: toolEnv() });
       if (r.code !== 0) throw new Error(`git clone failed: ${r.output.slice(-400)}`);
       dir = path.join(tmp, "repo");
     } else dir = path.resolve(expandHome(source));

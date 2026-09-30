@@ -19,6 +19,7 @@ import * as pkgs from "./packages.js";
 import { startJob, listJobs, getJob, pool } from "./jobs.js";
 import { attachShell } from "./shell.js";
 import * as tokens from "./tokens.js";
+import * as importer from "./importer.js";
 import * as system from "./system.js";
 import type { Instance, PackageEntry } from "./types.js";
 
@@ -123,7 +124,7 @@ export async function buildServer() {
   // ---------------- auth gate
   const PUBLIC = new Set(["/api/auth/me", "/api/auth/login", "/api/auth/setup", "/api/hooks/github", "/api/agent"]);
   /** Security-sensitive endpoints that API tokens may never call. */
-  const HUMAN_ONLY = ["/api/tokens", "/api/system/shell", "/api/system/password", "/api/system/totp", "/api/system/webhook", "/api/system/secrets", "/api/system/upgrade-pi", "/api/system/settings", "/api/system/cleanup", "/api/auth/"];
+  const HUMAN_ONLY = ["/api/tokens", "/api/import", "/api/system/shell", "/api/system/password", "/api/system/totp", "/api/system/webhook", "/api/system/secrets", "/api/system/upgrade-pi", "/api/system/settings", "/api/system/cleanup", "/api/auth/"];
   /** POST endpoints that don't change anything (allowed for read-only tokens). */
   const READ_POSTS = new Set(["/api/collect", "/api/resolve", "/api/deployments/plan", "/api/packages/preview"]);
 
@@ -630,6 +631,23 @@ export async function buildServer() {
     });
   }
 
+  // ---------------- import from an existing stand-alone pi (read-only on the source)
+  app.get("/api/import/setup", async (req) => importer.inspectSetup((req.query as any).dir || undefined));
+  app.get("/api/import/sessions", async (req) => importer.listSessions((req.query as any).dir || undefined));
+  app.post("/api/import/setup", async (req) => {
+    const b = (req.body ?? {}) as any;
+    const r = importer.importSetup(String(b.id ?? ""), b.dir || undefined);
+    audit("import.setup", { profile: r.profile.id, from: b.dir ?? "~/.pi/agent" }, ip(req));
+    bus.emit("msg", { topic: "state" });
+    return r;
+  });
+  app.post("/api/import/session", async (req) => {
+    const b = (req.body ?? {}) as any;
+    const job = importer.importSession({ file: String(b.file ?? ""), dir: b.dir || undefined, profile: String(b.profile ?? ""), name: b.name || undefined, cwd: b.cwd || undefined, start: b.start !== false });
+    audit("import.session", { file: b.file, profile: b.profile, name: b.name, cwd: b.cwd }, ip(req));
+    return { job };
+  });
+
   // ---------------- API tokens (interactive login only; see HUMAN_ONLY)
   app.get("/api/tokens", async () => ({ tokens: tokens.listTokens() }));
   app.post("/api/tokens", async (req) => {
@@ -782,9 +800,14 @@ export async function buildServer() {
 
   // ---------------- static UI
   if (fs.existsSync(paths.webDist)) {
-    await app.register(fastifyStatic, { root: paths.webDist, index: ["index.html"], wildcard: false });
+    // wildcard: true serves files as they exist on disk *now*, so a UI rebuild (upgrade, dev)
+    // takes effect without restarting the server.
+    await app.register(fastifyStatic, { root: paths.webDist, index: ["index.html"], wildcard: true });
     app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith("/api/") || req.url.startsWith("/ws")) return reply.status(404).send({ error: "not found" });
+      const pathname = req.url.split("?")[0];
+      if (pathname.startsWith("/api/") || pathname.startsWith("/ws")) return reply.status(404).send({ error: "not found" });
+      // Missing files (old asset hashes etc.) get a real 404, not the app shell with the wrong MIME type.
+      if (/\.[a-z0-9]+$/i.test(pathname)) return reply.status(404).send("not found");
       return reply.sendFile("index.html");
     });
   } else {

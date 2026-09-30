@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { post } from "../api";
 import { useAppState, useInstanceEvents } from "../store";
 import { resolveSelector } from "../selectors";
-import { Modal, StatusPill, toast, toastError, download, copy } from "../ui";
+import { Modal, StatusPill, toast, toastError, download, copy, Help, Markdown } from "../ui";
 
 const ACTIONS = [
   { value: "prompt", label: "Prompt", needsMsg: true },
@@ -47,15 +47,18 @@ export function CommandBar({ selectedIds, onClearSelection }: { selectedIds: str
 
   useInstanceEvents(
     (id, ev) => {
-      const cur = fanRef.current;
-      if (!cur || !cur[id]) return;
-      const t = cur[id];
-      let next: FanTarget | undefined;
-      if (ev.type === "message_update" && ev.assistantMessageEvent?.type === "text_delta") next = { ...t, text: t.text + ev.assistantMessageEvent.delta };
-      else if (ev.type === "tool_execution_start") next = { ...t, text: t.text + `\n⚙ ${ev.toolName}\n` };
-      else if (ev.type === "agent_settled") next = { ...t, done: true };
-      else if (ev.type === "message_end" && ev.message?.stopReason === "error") next = { ...t, error: ev.message.errorMessage };
-      if (next) setFan((f) => (f ? { ...f, [id]: next! } : f));
+      if (!fanRef.current?.[id]) return;
+      // Functional update: many deltas can arrive between renders; each must build on the latest text.
+      setFan((f) => {
+        const t = f?.[id];
+        if (!f || !t) return f;
+        let next: FanTarget | undefined;
+        if (ev.type === "message_update" && ev.assistantMessageEvent?.type === "text_delta") next = { ...t, text: t.text + ev.assistantMessageEvent.delta };
+        else if (ev.type === "tool_execution_start") next = { ...t, text: t.text + `\n⚙ ${ev.toolName}\n` };
+        else if (ev.type === "agent_settled") next = { ...t, done: true };
+        else if (ev.type === "message_end" && ev.message?.stopReason === "error") next = { ...t, error: ev.message.errorMessage };
+        return next ? { ...f, [id]: next } : f;
+      });
     },
     [],
   );
@@ -69,15 +72,24 @@ export function CommandBar({ selectedIds, onClearSelection }: { selectedIds: str
     if (!matches.length) return toast("Selector matches no instances", true);
     if (spec.needsMsg && !message.trim()) return toast("Type a message first", true);
     setBusy(true);
+    // Start listening BEFORE sending: fast models can finish before the request returns.
+    if (action === "prompt") {
+      const f: Record<string, FanTarget> = {};
+      for (const m of matches) f[m.id] = { id: m.id, name: m.name, text: "", done: false };
+      fanRef.current = f;
+      setFan(f);
+      setResults(null);
+    }
     try {
       const r = await post("/api/send", { selector, ids: selectedIds, action, message, model, level });
       const ok = r.results.filter((x: any) => x.ok).length;
       toast(`${spec.label} → ${ok}/${r.results.length} instance(s)`, ok < r.results.length);
       if (action === "prompt") {
-        const f: Record<string, FanTarget> = {};
-        for (const x of r.results) f[x.id] = { id: x.id, name: x.name, text: "", done: !x.ok, error: x.ok ? undefined : x.error };
-        setFan(f);
-        setResults(null);
+        setFan((cur) => {
+          const next: Record<string, FanTarget> = {};
+          for (const x of r.results) next[x.id] = x.ok ? (cur?.[x.id] ?? { id: x.id, name: x.name, text: "", done: false }) : { id: x.id, name: x.name, text: "", done: true, error: x.error };
+          return next;
+        });
         setMessage("");
       }
     } catch (e) {
@@ -104,6 +116,7 @@ export function CommandBar({ selectedIds, onClearSelection }: { selectedIds: str
       <div className="cmdbar">
         <div className="row nowrap">
           <span className="section-title nowrap">Target</span>
+          <Help topic="selector" />
           <input
             className="target grow"
             placeholder={selectedIds.length ? `${selectedIds.length} selected (+ optional selector)` : "all · cluster:reviewers · profile:docs · writers-3 · review*"}
@@ -111,6 +124,7 @@ export function CommandBar({ selectedIds, onClearSelection }: { selectedIds: str
             onChange={(e) => setSelector(e.target.value)}
           />
           <span className={`badge ${matches.length ? "kiwi" : ""}`}>{matches.length} match</span>
+          <Help topic="action" />
           <select value={action} onChange={(e) => setAction(e.target.value)} style={{ width: 170 }}>
             {ACTIONS.map((a) => (
               <option key={a.value} value={a.value}>
@@ -206,8 +220,14 @@ export function CommandBar({ selectedIds, onClearSelection }: { selectedIds: str
                       <a href={`#/instance/${encodeURIComponent(t.id)}`}>{t.name}</a>
                       <span className="right">{inst && <StatusPill status={inst.status} />}</span>
                     </div>
-                    <div className="fan-col-b">
-                      {t.error ? <span style={{ color: "var(--danger)" }}>{t.error}</span> : t.text || <span className="muted">{inst?.status === "queued" ? "queued…" : "waiting…"}</span>}
+                    <div className="fan-col-b" style={t.done && t.text ? { whiteSpace: "normal" } : undefined}>
+                      {t.error ? (
+                        <span style={{ color: "var(--danger)" }}>{t.error}</span>
+                      ) : t.text ? (
+                        t.done ? <Markdown text={t.text} /> : t.text
+                      ) : (
+                        <span className="muted">{inst?.status === "queued" ? "queued…" : "waiting…"}</span>
+                      )}
                     </div>
                   </div>
                 );
@@ -255,7 +275,7 @@ function Results({ results, onClose }: { results: any[]; onClose: () => void }) 
                 <StatusPill status={r.status} />
               </span>
             </div>
-            <div className="fan-col-b">{r.text ?? <span className="muted">no answer yet</span>}</div>
+            <div className="fan-col-b" style={{ whiteSpace: "normal" }}>{r.text ? <Markdown text={r.text} /> : <span className="muted">no answer yet</span>}</div>
           </div>
         ))}
       </div>
