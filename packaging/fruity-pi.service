@@ -1,0 +1,23 @@
+[Unit]
+Description=fruity-pi — multi-instance pi agent dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=FRUITY_PI_HOME=@STATE@
+Environment=NODE_ENV=production
+WorkingDirectory=@APP@
+ExecStart=@NODE@ @APP@/dist/cli.js serve
+Restart=on-failure
+RestartSec=3
+# pi instances are children; give them time to finish on stop.
+KillMode=mixed
+TimeoutStopSec=30
+# Hardening that doesn't get in the way of agents working in $HOME.
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target
