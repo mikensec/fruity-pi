@@ -156,7 +156,13 @@ export function runCommand(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
-    const timer = opts.timeoutMs ? setTimeout(() => child.kill("SIGTERM"), opts.timeoutMs) : undefined;
+    let killTimer: NodeJS.Timeout | undefined;
+    const timer = opts.timeoutMs
+      ? setTimeout(() => {
+          child.kill("SIGTERM");
+          killTimer = setTimeout(() => child.kill("SIGKILL"), 3000);
+        }, opts.timeoutMs)
+      : undefined;
     const handle = (chunk: Buffer) => {
       const text = redact(chunk.toString("utf8"));
       output += text;
@@ -170,6 +176,7 @@ export function runCommand(
     });
     child.on("close", (code) => {
       if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       resolve({ code: code ?? 1, output });
     });
   });

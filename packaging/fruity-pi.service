@@ -11,6 +11,10 @@ Environment=NODE_ENV=production
 EnvironmentFile=-@STATE@/env
 WorkingDirectory=@APP@
 ExecStart=@NODE@ @APP@/dist/cli.js serve
+# Setting a CPU weight makes systemd enable per-service CPU fair-sharing in the user
+# manager, so a busy neighbour service (OCR, builds, …) can't starve the agents.
+# 100 = an equal share with every other service; raise it to prioritise fruity-pi.
+CPUWeight=100
 Restart=on-failure
 RestartSec=3
 # pi instances are children; give them time to finish on stop.

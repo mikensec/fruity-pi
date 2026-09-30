@@ -9,8 +9,8 @@ import { startJob } from "./jobs.js";
 import { rollout } from "./supervisor.js";
 import { audit } from "./audit.js";
 
-async function version(cmd: string, args: string[]) {
-  const r = await runCommand(cmd, args, { timeoutMs: 10_000 });
+async function version(cmd: string, args: string[], timeoutMs = 10_000) {
+  const r = await runCommand(cmd, args, { timeoutMs });
   return r.code === 0 ? r.output.trim().split("\n")[0] : undefined;
 }
 
@@ -28,19 +28,30 @@ function hasProviderCredentials(secrets: Record<string, string>) {
 }
 
 export async function systemStatus() {
-  let piCli: string | undefined;
-  try {
-    const [cmd, prefix] = piCommand();
-    piCli = await version(cmd, [...prefix, "--version"]);
-  } catch {
-    /* not installed */
+  // "Installed" comes from the package on disk; actually running `pi --version` only
+  // confirms it starts. A slow start (CPU contention) must not read as "not installed".
+  const installed = piVersion();
+  let piRuns: boolean | undefined;
+  if (installed) {
+    try {
+      const [cmd, prefix] = piCommand();
+      piRuns = !!(await version(cmd, [...prefix, "--version"], 30_000));
+    } catch {
+      piRuns = false;
+    }
   }
   const secrets = loadSecrets();
+  const gitV = await version("git", ["--version"]);
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   const checks = [
     { id: "node", label: "Node.js ≥ 22.13", ok: nodeMajor > 22 || (nodeMajor === 22 && Number(process.versions.node.split(".")[1]) >= 13), detail: process.version },
-    { id: "git", label: "git", ok: !!(await version("git", ["--version"])), detail: await version("git", ["--version"]) },
-    { id: "pi", label: "pi coding agent", ok: !!piCli, detail: piCli ? `v${piCli}` : "not installed" },
+    { id: "git", label: "git", ok: !!gitV, detail: gitV ?? "not found" },
+    {
+      id: "pi",
+      label: "pi coding agent",
+      ok: !!installed,
+      detail: !installed ? "not installed" : piRuns ? `v${installed}` : `v${installed} (installed, but \`pi --version\` didn't finish in 30s — is the machine overloaded?)`,
+    },
     { id: "keys", label: "Model provider credentials", ok: hasProviderCredentials(secrets), detail: `${Object.keys(secrets).length} secret(s) configured` },
     { id: "profile", label: "At least one profile", ok: store.list("profile").length > 0, detail: `${store.list("profile").length} profile(s)` },
   ];
