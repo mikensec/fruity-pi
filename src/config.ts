@@ -46,12 +46,22 @@ export function loadConfig(): Config {
   let raw: Partial<Config> = {};
   if (fs.existsSync(paths.config)) raw = JSON.parse(fs.readFileSync(paths.config, "utf8"));
   cached = { ...DEFAULTS, ...raw, auth: { ...DEFAULTS.auth, ...(raw.auth ?? {}) } };
+  // Environment overrides (containers / systemd). Not persisted.
+  if (process.env.FRUITY_PI_HOST) cached.host = process.env.FRUITY_PI_HOST;
+  if (process.env.FRUITY_PI_PORT) cached.port = Number(process.env.FRUITY_PI_PORT);
   return cached;
 }
 
 export function saveConfig(patch: Partial<Config>): Config {
   const next = { ...loadConfig(), ...patch };
-  fs.writeFileSync(paths.config, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  // Don't bake env overrides into the file.
+  const onDisk: Partial<Config> = fs.existsSync(paths.config) ? JSON.parse(fs.readFileSync(paths.config, "utf8")) : {};
+  const persisted = {
+    ...next,
+    host: process.env.FRUITY_PI_HOST ? (onDisk.host ?? DEFAULTS.host) : next.host,
+    port: process.env.FRUITY_PI_PORT ? (onDisk.port ?? DEFAULTS.port) : next.port,
+  };
+  fs.writeFileSync(paths.config, JSON.stringify(persisted, null, 2) + "\n", { mode: 0o600 });
   fs.chmodSync(paths.config, 0o600);
   cached = next;
   return next;
@@ -121,8 +131,10 @@ export function maskedSecrets(): { key: string; preview: string }[] {
 
 let secretValues: string[] = [];
 export function refreshRedactor() {
-  secretValues = Object.values(loadSecrets())
-    .filter((v) => v.length >= 8)
+  const notSecret = /^(AWS_REGION|AWS_DEFAULT_REGION|AWS_PROFILE|FRUITY_PI_.*)$/;
+  secretValues = Object.entries(loadSecrets())
+    .filter(([k, v]) => v.length >= 8 && !notSecret.test(k))
+    .map(([, v]) => v)
     .sort((a, b) => b.length - a.length);
 }
 

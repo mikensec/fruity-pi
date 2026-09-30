@@ -14,7 +14,18 @@ async function version(cmd: string, args: string[]) {
   return r.code === 0 ? r.output.trim().split("\n")[0] : undefined;
 }
 
-const PROVIDER_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "AI_GATEWAY_API_KEY"];
+const PROVIDER_KEYS = [
+  "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "AI_GATEWAY_API_KEY",
+  // Amazon Bedrock
+  "AWS_REGION", "FRUITY_PI_AWS_INSTANCE_ROLE", "AWS_BEARER_TOKEN_BEDROCK", "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+];
+
+/** True when some model provider can authenticate (API key, Bedrock credentials, or an EC2/ECS role). */
+function hasProviderCredentials(secrets: Record<string, string>) {
+  const all = { ...(process.env as Record<string, string>), ...secrets };
+  if (Object.keys(secrets).some((k) => /API_KEY$/.test(k))) return true;
+  return !!(all.AWS_BEARER_TOKEN_BEDROCK || all.AWS_PROFILE || all.FRUITY_PI_AWS_INSTANCE_ROLE === "1" || (all.AWS_ACCESS_KEY_ID && all.AWS_SECRET_ACCESS_KEY) || all.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || all.AWS_WEB_IDENTITY_TOKEN_FILE);
+}
 
 export async function systemStatus() {
   let piCli: string | undefined;
@@ -30,7 +41,7 @@ export async function systemStatus() {
     { id: "node", label: "Node.js ≥ 22.13", ok: nodeMajor > 22 || (nodeMajor === 22 && Number(process.versions.node.split(".")[1]) >= 13), detail: process.version },
     { id: "git", label: "git", ok: !!(await version("git", ["--version"])), detail: await version("git", ["--version"]) },
     { id: "pi", label: "pi coding agent", ok: !!piCli, detail: piCli ? `v${piCli}` : "not installed" },
-    { id: "keys", label: "Provider API key", ok: Object.keys(secrets).some((k) => PROVIDER_KEYS.includes(k) || /API_KEY$/.test(k)), detail: `${Object.keys(secrets).length} secret(s) configured` },
+    { id: "keys", label: "Model provider credentials", ok: hasProviderCredentials(secrets), detail: `${Object.keys(secrets).length} secret(s) configured` },
     { id: "profile", label: "At least one profile", ok: store.list("profile").length > 0, detail: `${store.list("profile").length} profile(s)` },
   ];
   return {

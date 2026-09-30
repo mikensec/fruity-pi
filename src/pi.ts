@@ -43,8 +43,39 @@ export function piVersion(): string | undefined {
   return dir ? JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).version : undefined;
 }
 
+const AWS_PASSTHROUGH = /^AWS_(REGION|DEFAULT_REGION|PROFILE|CONFIG_FILE|SHARED_CREDENTIALS_FILE|CONTAINER_CREDENTIALS_(RELATIVE|FULL)_URI|CONTAINER_AUTHORIZATION_TOKEN(_FILE)?|WEB_IDENTITY_TOKEN_FILE|ROLE_ARN|ROLE_SESSION_NAME|STS_REGIONAL_ENDPOINTS|EC2_METADATA_[A-Z_]+|BEDROCK_[A-Z_]+)$/;
+
+/**
+ * HOME is overridden per instance, so point the AWS SDK at the operator's real
+ * ~/.aws files. With FRUITY_PI_AWS_INSTANCE_ROLE=1 (EC2), generate a profile that only
+ * sets the region: pi enables Bedrock when AWS_PROFILE is set, and the SDK then falls
+ * through to the EC2 instance role (IMDS) for credentials.
+ */
+function applyAwsConfig(env: Record<string, string>) {
+  const realAws = path.join(os.homedir(), ".aws");
+  if (!env.AWS_CONFIG_FILE && fs.existsSync(path.join(realAws, "config"))) env.AWS_CONFIG_FILE = path.join(realAws, "config");
+  if (!env.AWS_SHARED_CREDENTIALS_FILE && fs.existsSync(path.join(realAws, "credentials"))) env.AWS_SHARED_CREDENTIALS_FILE = path.join(realAws, "credentials");
+  if (env.FRUITY_PI_AWS_INSTANCE_ROLE !== "1") return;
+  const hasExplicit = env.AWS_PROFILE || env.AWS_BEARER_TOKEN_BEDROCK || (env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY);
+  if (hasExplicit) return;
+  const region = env.AWS_REGION || env.AWS_DEFAULT_REGION || "us-east-1";
+  const file = path.join(paths.root, "aws", "instance-role.config");
+  const body = `[profile fruity-pi-instance-role]\nregion = ${region}\n`;
+  try {
+    if (!fs.existsSync(file) || fs.readFileSync(file, "utf8") !== body) {
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(file, body, { mode: 0o600 });
+    }
+  } catch {
+    return;
+  }
+  env.AWS_CONFIG_FILE = file;
+  env.AWS_PROFILE = "fruity-pi-instance-role";
+  env.AWS_REGION = region;
+}
+
 /** Only these host variables pass through to instances; everything else (incl. the real HOME/XDG dirs) is dropped. */
-const PASSTHROUGH = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "SHELL", "USER", "LOGNAME", "TZ", "SSH_AUTH_SOCK", "http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
+const PASSTHROUGH = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "SHELL", "USER", "LOGNAME", "TZ", "SSH_AUTH_SOCK", "FRUITY_PI_AWS_INSTANCE_ROLE", "http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
 
 /**
  * Build the fully isolated environment for one pi instance.
@@ -54,6 +85,8 @@ export function instanceEnv(inst: Pick<Instance, "id">, profile?: Pick<Profile, 
   const p = instancePaths(inst.id);
   const env: Record<string, string> = {};
   for (const k of PASSTHROUGH) if (process.env[k]) env[k] = process.env[k]!;
+  // AWS (Bedrock): region/profile/role variables from the host (e.g. systemd, docker -e, ECS/IRSA).
+  for (const [k, v] of Object.entries(process.env)) if (AWS_PASSTHROUGH.test(k) && v) env[k] = v;
   // Keep node on PATH even if the server was started with an absolute node path.
   env.PATH = [path.dirname(process.execPath), env.PATH ?? "/usr/local/bin:/usr/bin:/bin"].join(":");
   const realGitConfig = path.join(os.homedir(), ".gitconfig");
@@ -74,6 +107,7 @@ export function instanceEnv(inst: Pick<Instance, "id">, profile?: Pick<Profile, 
   });
   // Let git in instances use the operator's git identity/credential helpers for private repos.
   if (fs.existsSync(realGitConfig) && !env.GIT_CONFIG_GLOBAL) env.GIT_CONFIG_GLOBAL = realGitConfig;
+  applyAwsConfig(env);
   return env;
 }
 

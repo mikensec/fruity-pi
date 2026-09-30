@@ -1,0 +1,22 @@
+# docker compose up -d --build
+# Then: docker compose logs fruity-pi | grep "setup token"   →  open http://localhost:7777
+services:
+  fruity-pi:
+    build: .
+    image: fruity-pi:latest
+    container_name: fruity-pi
+    restart: unless-stopped
+    ports:
+      # Loopback only. Reach it from your laptop with: ssh -L 7777:127.0.0.1:7777 you@host
+      - "127.0.0.1:7777:7777"
+    volumes:
+      - fruity-state:/home/node/.fruity-pi   # config, instances, sessions, repos
+      - ./work:/work                          # optional: code for agents to work on (use cwd: /work/... in deployments)
+    environment:
+      # Amazon Bedrock (optional) — see README "AWS EC2 + Bedrock".
+      AWS_REGION: ${AWS_REGION:-}
+      FRUITY_PI_AWS_INSTANCE_ROLE: ${FRUITY_PI_AWS_INSTANCE_ROLE:-}
+    stop_grace_period: 30s
+
+volumes:
+  fruity-state:

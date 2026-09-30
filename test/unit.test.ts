@@ -47,7 +47,7 @@ test("env: isolates HOME / agent dir and never leaks the real home", () => {
   assert.ok(env.PI_CODING_AGENT_SESSION_DIR.startsWith(TMP));
   assert.equal(env.FOO, "bar");
   for (const [k, v] of Object.entries(env)) {
-    if (k === "GIT_CONFIG_GLOBAL" || k === "PATH" || k === "SHELL" || k === "SSH_AUTH_SOCK") continue;
+    if (["GIT_CONFIG_GLOBAL", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "PATH", "SHELL", "SSH_AUTH_SOCK"].includes(k)) continue;
     assert.ok(!v.startsWith(realHome + "/") || v.startsWith(TMP), `${k} leaks real home: ${v}`);
   }
   assert.notEqual(instanceEnv({ id: "demo-2" }).HOME, env.HOME);
@@ -59,6 +59,36 @@ test("secrets: injected into env and redacted from logs", () => {
   assert.equal(env.ANTHROPIC_API_KEY, "fake-test-secret-value-123");
   assert.equal(redact("key=fake-test-secret-value-123!"), "key=[REDACTED]!");
   assert.equal(fs.statSync(path.join(TMP, "secrets.env")).mode & 0o777, 0o600);
+});
+
+test("bedrock: EC2 instance-role mode generates a region-only AWS profile", () => {
+  saveSecrets({ FRUITY_PI_AWS_INSTANCE_ROLE: "1", AWS_REGION: "us-west-2" });
+  const env = instanceEnv({ id: "bedrock-1" });
+  assert.equal(env.AWS_PROFILE, "fruity-pi-instance-role");
+  assert.equal(env.AWS_REGION, "us-west-2");
+  assert.ok(env.AWS_CONFIG_FILE.startsWith(TMP));
+  assert.equal(fs.readFileSync(env.AWS_CONFIG_FILE, "utf8"), "[profile fruity-pi-instance-role]\nregion = us-west-2\n");
+  // Region is not a secret: must not be redacted from logs.
+  assert.equal(redact("region us-west-2"), "region us-west-2");
+  // Explicit credentials win over the instance role.
+  saveSecrets({ AWS_BEARER_TOKEN_BEDROCK: "bedrock-token-abcdef" });
+  const env2 = instanceEnv({ id: "bedrock-1" });
+  assert.equal(env2.AWS_PROFILE, undefined);
+  assert.equal(env2.AWS_BEARER_TOKEN_BEDROCK, "bedrock-token-abcdef");
+  saveSecrets({ FRUITY_PI_AWS_INSTANCE_ROLE: null, AWS_REGION: null, AWS_BEARER_TOKEN_BEDROCK: null });
+});
+
+test("bedrock: host AWS variables pass through, unrelated ones don't", () => {
+  process.env.AWS_REGION = "eu-central-1";
+  process.env.AWS_WEB_IDENTITY_TOKEN_FILE = "/var/run/token";
+  process.env.SOME_RANDOM_HOST_VAR = "nope";
+  const env = instanceEnv({ id: "x" });
+  assert.equal(env.AWS_REGION, "eu-central-1");
+  assert.equal(env.AWS_WEB_IDENTITY_TOKEN_FILE, "/var/run/token");
+  assert.equal(env.SOME_RANDOM_HOST_VAR, undefined);
+  delete process.env.AWS_REGION;
+  delete process.env.AWS_WEB_IDENTITY_TOKEN_FILE;
+  delete process.env.SOME_RANDOM_HOST_VAR;
 });
 
 test("package identity ignores version/ref", () => {

@@ -4,7 +4,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
-import { paths } from "./paths.js";
+import { paths, ensureDir } from "./paths.js";
 import { loadConfig, saveConfig, safeConfig, saveSecrets, refreshRedactor, randomToken } from "./config.js";
 import * as auth from "./auth.js";
 import { audit, readAudit } from "./audit.js";
@@ -33,6 +33,7 @@ declare module "fastify" {
 /** Token for the local CLI, created on first use. Readable only by the owning user. */
 export function cliToken(): string {
   const file = `${paths.root}/cli.token`;
+  ensureDir(paths.root);
   if (!fs.existsSync(file)) fs.writeFileSync(file, randomToken(32) + "\n", { mode: 0o600 });
   return fs.readFileSync(file, "utf8").trim();
 }
@@ -55,11 +56,17 @@ export async function buildServer() {
   const cfg = loadConfig();
   refreshRedactor();
 
-  if (!isLoopback(cfg.host)) {
+  // Inside a container the server must bind 0.0.0.0 on the container network; the
+  // operator is then responsible for publishing the port on host loopback only.
+  const containerBind = process.env.FRUITY_PI_CONTAINER === "1";
+  if (!isLoopback(cfg.host) && !containerBind) {
     if (!cfg.allowRemote) throw new Error(`Refusing to bind ${cfg.host}: set "allowRemote": true in ${paths.config} (TLS is then required)`);
     if (!cfg.tls || !fs.existsSync(cfg.tls.cert) || !fs.existsSync(cfg.tls.key)) {
       throw new Error(`Refusing to bind ${cfg.host} without TLS: configure "tls": {"cert","key"} in ${paths.config} (install.sh --remote can generate one)`);
     }
+  }
+  if (containerBind && !isLoopback(cfg.host)) {
+    console.warn(`⚠ container mode: listening on ${cfg.host}:${cfg.port} inside the container. Publish it on host loopback only (-p 127.0.0.1:${cfg.port}:${cfg.port}) or put TLS in front.`);
   }
   const useTls = !!(cfg.tls && fs.existsSync(cfg.tls.cert) && fs.existsSync(cfg.tls.key));
 
