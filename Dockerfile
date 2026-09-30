@@ -4,9 +4,15 @@
 
 # ---------- build stage: compile server + UI, then drop dev dependencies
 FROM node:22-bookworm-slim AS build
+# Proxy: docker passes HTTP_PROXY/HTTPS_PROXY/NO_PROXY build args through automatically.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+# Corporate / TLS-inspection root CAs (certs/*.crt), trusted by apt, git, curl and Node.
+COPY certs/ /usr/local/share/ca-certificates/fruity-pi/
+RUN update-ca-certificates >/dev/null
+ENV NODE_USE_SYSTEM_CA=1 \
+    npm_config_cafile=/etc/ssl/certs/ca-certificates.crt
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -20,13 +26,20 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates curl bash tini ripgrep jq python3 less procps \
  && rm -rf /var/lib/apt/lists/*
+COPY certs/ /usr/local/share/ca-certificates/fruity-pi/
+RUN update-ca-certificates >/dev/null
 
 ENV NODE_ENV=production \
     FRUITY_PI_HOME=/home/node/.fruity-pi \
     FRUITY_PI_HOST=0.0.0.0 \
     FRUITY_PI_PORT=7777 \
     FRUITY_PI_CONTAINER=1 \
-    SHELL=/bin/bash
+    SHELL=/bin/bash \
+    NODE_USE_SYSTEM_CA=1 \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    npm_config_cafile=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /app
 COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
@@ -44,7 +57,7 @@ RUN printf '#!/bin/sh\nexec node /app/dist/cli.js "$@"\n' > /usr/local/bin/fruit
 USER node
 VOLUME ["/home/node/.fruity-pi"]
 EXPOSE 7777
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD curl -fsS http://127.0.0.1:7777/api/auth/me >/dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD curl -fsS --noproxy "*" http://127.0.0.1:7777/api/auth/me >/dev/null || exit 1
 # tini reaps the pi child processes and forwards SIGTERM for a clean shutdown.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "/app/dist/cli.js", "serve"]

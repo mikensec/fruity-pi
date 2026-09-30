@@ -35,6 +35,29 @@ async function api(method: string, route: string, body?: unknown) {
   return data;
 }
 
+/**
+ * Route the server's own outbound HTTP (npm catalog search, package info) through
+ * HTTP(S)_PROXY / NO_PROXY when set. git/npm/pi child processes read the env themselves.
+ */
+async function useEnvProxy() {
+  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+  if (!proxy) return;
+  const http = (await import("node:http")) as unknown as { setGlobalProxyFromEnv?: (env?: NodeJS.ProcessEnv) => void };
+  if (typeof http.setGlobalProxyFromEnv === "function") {
+    http.setGlobalProxyFromEnv({ ...process.env, NO_PROXY: withLocalNoProxy(process.env.NO_PROXY || process.env.no_proxy) });
+    console.log(`   outbound HTTP via proxy ${proxy.replace(/\/\/[^@/]*@/, "//***@")}`);
+  } else {
+    console.warn("   ⚠ HTTPS_PROXY is set but this Node version can't apply it to fetch(); use Node ≥ 22.21 or start with NODE_USE_ENV_PROXY=1");
+  }
+}
+
+/** Never proxy loopback or the EC2 metadata endpoint. */
+function withLocalNoProxy(list = "") {
+  const items = new Set(list.split(",").map((s) => s.trim()).filter(Boolean));
+  for (const h of ["localhost", "127.0.0.1", "::1", "169.254.169.254"]) items.add(h);
+  return [...items].join(",");
+}
+
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const c of process.stdin) chunks.push(c as Buffer);
@@ -46,6 +69,7 @@ async function main() {
   switch (cmd) {
     case "serve": {
       process.removeAllListeners("warning"); // node:sqlite experimental warning noise
+      await useEnvProxy();
       const { buildServer, cliToken } = await import("./server.js");
       const { bootInstances, shutdownAll } = await import("./supervisor.js");
       const { startRepoPoller, stopRepoPoller } = await import("./repos.js");

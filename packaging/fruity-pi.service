@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=simple
 Environment=FRUITY_PI_HOME=@STATE@
 Environment=NODE_ENV=production
+# Proxy / corporate CA settings written by install.sh --proxy / --ca-cert (optional).
+EnvironmentFile=-@STATE@/env
 WorkingDirectory=@APP@
 ExecStart=@NODE@ @APP@/dist/cli.js serve
 Restart=on-failure

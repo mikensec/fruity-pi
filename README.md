@@ -47,6 +47,7 @@ Options:
 | `--port 8080` | change the port |
 | `--remote` | listen on `0.0.0.0` over HTTPS with a self-signed cert (firewall it!) |
 | `--no-service` | skip the systemd user service; run `fruity-pi serve` yourself |
+| `--proxy URL`, `--ca-cert FILE`, `--no-proxy LIST`, `--ca-system` | corporate proxy / TLS inspection, see [below](#behind-a-corporate-proxy-with-tls-inspection) |
 | `--uninstall [--purge]` | remove the app (and with `--purge`, all state) |
 
 Re-running `install.sh` upgrades in place and keeps your config, password and instances. You can also upgrade pi itself from **System → Install / upgrade pi**. That does a rolling restart onto the new version.
@@ -175,6 +176,88 @@ aws ec2 modify-instance-metadata-options --instance-id i-0123456789abcdef0 \
   --http-endpoint enabled --http-tokens required --http-put-response-hop-limit 2
 AWS_REGION=us-east-1 FRUITY_PI_AWS_INSTANCE_ROLE=1 docker compose up -d --build
 ```
+
+## Behind a corporate proxy with TLS inspection
+
+If your network forces traffic through a proxy that decrypts and re-signs HTTPS (Zscaler, Netskope, Palo Alto, Blue Coat, Fortinet, …), every tool fruity-pi uses has to know two things:
+- **The proxy URL.**
+- **Your company's root CA certificate.** Without it you'll see errors like `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `unable to get local issuer certificate`, or git's `SSL certificate problem`.
+
+That covers Node (the server, pi and the AWS SDK), npm, git, curl and Python. The installer configures all of them in one go.
+
+### 1. Get the root CA as a PEM file
+
+Ask IT for the inspection root certificate, or export it from your browser's certificate viewer. It must be PEM; the file contains `-----BEGIN CERTIFICATE-----`. To convert a DER/`.cer` file:
+
+```bash
+openssl x509 -inform der -in corp-root.cer -out corp-root.pem
+```
+
+To see which CA is re-signing traffic, look at the **last** certificate in the chain:
+
+```bash
+openssl s_client -proxy proxy.corp:3128 -connect registry.npmjs.org:443 -showcerts </dev/null
+```
+
+### 2. Install with the proxy and CA
+
+```bash
+./install.sh --proxy http://proxy.corp:3128 --ca-cert ~/corp-root.pem
+# optional: --no-proxy .corp.internal,10.0.0.0/8   extra hosts that should bypass the proxy
+# optional: --ca-system                            also add the CA to the OS trust store (sudo)
+```
+
+The flags are applied to the install itself: apt/dnf via `sudo --preserve-env`, the Node.js download, `npm install` and git. They're also saved to `~/.fruity-pi/env` (mode 600), which the systemd service, the `fruity-pi` CLI and **every pi instance** read:
+
+| setting | used by |
+|---|---|
+| `HTTP_PROXY`, `HTTPS_PROXY` (+ lowercase) | pi and its provider SDKs, npm, git, curl, Python |
+| `NO_PROXY` | always includes `localhost,127.0.0.1,::1,169.254.169.254` (loopback + EC2 metadata) |
+| `NODE_USE_ENV_PROXY=1` | Node's built-in `fetch`/`http` (the server's package search, pi extensions) |
+| `NODE_EXTRA_CA_CERTS` → your CA | Node: fruity-pi, pi, npm, AWS SDK |
+| `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `npm_config_cafile`, `REQUESTS_CA_BUNDLE`, `AWS_CA_BUNDLE`, `PIP_CERT` → `~/.fruity-pi/tls/ca-bundle.pem` (system roots + your CA) | OpenSSL tools, curl, git, npm, Python, AWS CLI |
+
+Re-running `./install.sh` (for example to upgrade) reuses the saved settings; you don't need to repeat the flags. To change them, re-run with new flags, or edit `~/.fruity-pi/env` and then run `systemctl --user restart fruity-pi`. Existing instances pick up changes when they restart.
+
+Without the installer (manual `fruity-pi serve`), export the same variables before starting the server. Instances inherit them.
+
+### 3. Allow these hosts on the proxy
+
+| host | why |
+|---|---|
+| `registry.npmjs.org` | pi packages, package catalog search, installing/upgrading pi |
+| `github.com`, `codeload.github.com` (or your git host) | tracked skill repos, `git:` packages |
+| your model API: `api.anthropic.com`, `api.openai.com`, `bedrock-runtime.<region>.amazonaws.com`, … | the agents themselves |
+| `nodejs.org` | only if the installer has to download Node.js |
+| `pi.dev` | optional (pi version checks; fruity-pi already disables telemetry) |
+| `deb.debian.org` | only for `docker build` |
+
+Model **API keys set in your shell are not passed to instances** (by design). Put them in **System → Secrets**.
+
+### Docker behind a proxy
+
+1. Copy the CA into `certs/` as a `.crt` file (PEM). It's git-ignored. The image adds it to the system trust store and sets `NODE_USE_SYSTEM_CA=1`, so apt, git, curl, npm, Node, Python and the AWS SDK all trust it.
+2. Export the proxy and build/run. Compose passes the variables both as build args (apt + `npm ci`) and at runtime:
+
+```bash
+cp ~/corp-root.pem certs/corp-root.crt
+export HTTP_PROXY=http://proxy.corp:3128 HTTPS_PROXY=http://proxy.corp:3128 NO_PROXY=.corp.internal
+docker compose up -d --build
+```
+
+With plain `docker build`, pass `--build-arg HTTP_PROXY=… --build-arg HTTPS_PROXY=…`. Alternatively configure `~/.docker/config.json` → `proxies` once, and Docker injects the settings into every build and container.
+
+### Troubleshooting
+
+| symptom | fix |
+|---|---|
+| `UNABLE_TO_VERIFY_LEAF_SIGNATURE` / `SELF_SIGNED_CERT_IN_CHAIN` / `unable to get local issuer certificate` | CA not configured, or you exported the site/intermediate certificate instead of the **root**. Use the last cert from `openssl s_client -showcerts`. If there's an intermediate, put root + intermediate in the same PEM. |
+| `407 Proxy Authentication Required` | put credentials in the URL, `http://user:pass@proxy.corp:3128`, URL-encoding special characters (`@` → `%40`, `:` → `%3A`). NTLM/Kerberos-only proxies need a local helper such as `cntlm` or `px`; point `--proxy` at that. |
+| Package search in the UI fails but instances work | the server needs outbound access to `registry.npmjs.org`; check `journalctl --user -u fruity-pi` for the `outbound HTTP via proxy …` line. |
+| Bedrock instance-role credentials time out | `169.254.169.254` must bypass the proxy (it's in `NO_PROXY` by default). |
+| Test the setup | `source ~/.fruity-pi/env && curl -I https://registry.npmjs.org && git ls-remote https://github.com/earendil-works/pi HEAD` |
+
+Note that the inspection proxy can read everything that passes through it, including prompts, code and API keys. That's inherent to TLS inspection and worth clearing with your security team.
 
 ### Development
 

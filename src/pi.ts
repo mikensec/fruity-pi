@@ -43,7 +43,7 @@ export function piVersion(): string | undefined {
   return dir ? JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).version : undefined;
 }
 
-const AWS_PASSTHROUGH = /^AWS_(REGION|DEFAULT_REGION|PROFILE|CONFIG_FILE|SHARED_CREDENTIALS_FILE|CONTAINER_CREDENTIALS_(RELATIVE|FULL)_URI|CONTAINER_AUTHORIZATION_TOKEN(_FILE)?|WEB_IDENTITY_TOKEN_FILE|ROLE_ARN|ROLE_SESSION_NAME|STS_REGIONAL_ENDPOINTS|EC2_METADATA_[A-Z_]+|BEDROCK_[A-Z_]+)$/;
+const AWS_PASSTHROUGH = /^AWS_(REGION|DEFAULT_REGION|PROFILE|CONFIG_FILE|SHARED_CREDENTIALS_FILE|CONTAINER_CREDENTIALS_(RELATIVE|FULL)_URI|CONTAINER_AUTHORIZATION_TOKEN(_FILE)?|WEB_IDENTITY_TOKEN_FILE|ROLE_ARN|ROLE_SESSION_NAME|STS_REGIONAL_ENDPOINTS|EC2_METADATA_[A-Z_]+|BEDROCK_[A-Z_]+|CA_BUNDLE)$/;
 
 /**
  * HOME is overridden per instance, so point the AWS SDK at the operator's real
@@ -75,7 +75,13 @@ function applyAwsConfig(env: Record<string, string>) {
 }
 
 /** Only these host variables pass through to instances; everything else (incl. the real HOME/XDG dirs) is dropped. */
-const PASSTHROUGH = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "SHELL", "USER", "LOGNAME", "TZ", "SSH_AUTH_SOCK", "FRUITY_PI_AWS_INSTANCE_ROLE", "http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
+const PASSTHROUGH = [
+  "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "SHELL", "USER", "LOGNAME", "TZ", "SSH_AUTH_SOCK", "FRUITY_PI_AWS_INSTANCE_ROLE",
+  // Corporate proxy
+  "http_proxy", "https_proxy", "no_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "npm_config_proxy", "npm_config_https_proxy", "npm_config_noproxy",
+  // Custom CA / TLS inspection: Node, OpenSSL, curl, git, npm, Python tools
+  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "npm_config_cafile", "REQUESTS_CA_BUNDLE", "PIP_CERT",
+];
 
 /**
  * Build the fully isolated environment for one pi instance.
@@ -87,6 +93,14 @@ export function instanceEnv(inst: Pick<Instance, "id">, profile?: Pick<Profile, 
   for (const k of PASSTHROUGH) if (process.env[k]) env[k] = process.env[k]!;
   // AWS (Bedrock): region/profile/role variables from the host (e.g. systemd, docker -e, ECS/IRSA).
   for (const [k, v] of Object.entries(process.env)) if (AWS_PASSTHROUGH.test(k) && v) env[k] = v;
+  // Behind a proxy, let Node's own fetch/http in pi extensions use it too (pi's clients already do).
+  if (env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy) {
+    if (!env.NODE_USE_ENV_PROXY) env.NODE_USE_ENV_PROXY = "1";
+    // Loopback and the EC2 metadata service (instance-role credentials) must never go through the proxy.
+    const noProxy = new Set((env.NO_PROXY || env.no_proxy || "").split(",").map((x) => x.trim()).filter(Boolean));
+    for (const h of ["localhost", "127.0.0.1", "::1", "169.254.169.254"]) noProxy.add(h);
+    env.NO_PROXY = env.no_proxy = [...noProxy].join(",");
+  }
   // Keep node on PATH even if the server was started with an absolute node path.
   env.PATH = [path.dirname(process.execPath), env.PATH ?? "/usr/local/bin:/usr/bin:/bin"].join(":");
   const realGitConfig = path.join(os.homedir(), ".gitconfig");

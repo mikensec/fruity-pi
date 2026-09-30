@@ -2,7 +2,12 @@
 # Then: docker compose logs fruity-pi | grep "setup token"   →  open http://localhost:7777
 services:
   fruity-pi:
-    build: .
+    build:
+      context: .
+      args:   # used by apt / npm during the build when you're behind a proxy
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     image: fruity-pi:latest
     container_name: fruity-pi
     restart: unless-stopped
@@ -13,6 +18,10 @@ services:
       - fruity-state:/home/node/.fruity-pi   # config, instances, sessions, repos
       - ./work:/work                          # optional: code for agents to work on (use cwd: /work/... in deployments)
     environment:
+      # Corporate proxy (optional). Put your inspection root CA in ./certs before building.
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,::1,169.254.169.254${NO_PROXY:+,${NO_PROXY}}
       # Amazon Bedrock (optional) — see README "AWS EC2 + Bedrock".
       AWS_REGION: ${AWS_REGION:-}
       FRUITY_PI_AWS_INSTANCE_ROLE: ${FRUITY_PI_AWS_INSTANCE_ROLE:-}

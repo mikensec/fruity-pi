@@ -91,6 +91,21 @@ test("bedrock: host AWS variables pass through, unrelated ones don't", () => {
   delete process.env.SOME_RANDOM_HOST_VAR;
 });
 
+test("proxy + custom CA variables reach instances; loopback/IMDS bypass the proxy", () => {
+  process.env.HTTPS_PROXY = "http://proxy.corp:3128";
+  process.env.NO_PROXY = ".corp.internal";
+  process.env.NODE_EXTRA_CA_CERTS = "/etc/ssl/corp-root.pem";
+  process.env.GIT_SSL_CAINFO = "/etc/ssl/bundle.pem";
+  const env = instanceEnv({ id: "p1" });
+  assert.equal(env.HTTPS_PROXY, "http://proxy.corp:3128");
+  assert.equal(env.NODE_EXTRA_CA_CERTS, "/etc/ssl/corp-root.pem");
+  assert.equal(env.GIT_SSL_CAINFO, "/etc/ssl/bundle.pem");
+  assert.equal(env.NODE_USE_ENV_PROXY, "1");
+  for (const h of [".corp.internal", "localhost", "127.0.0.1", "169.254.169.254"]) assert.ok(env.NO_PROXY.split(",").includes(h), h);
+  for (const k of ["HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO"]) delete process.env[k];
+  assert.equal(instanceEnv({ id: "p1" }).NODE_USE_ENV_PROXY, undefined);
+});
+
 test("package identity ignores version/ref", () => {
   assert.equal(packageIdentity("npm:@foo/bar@1.2.3"), "npm:@foo/bar");
   assert.equal(packageIdentity("npm:bar"), "npm:bar");

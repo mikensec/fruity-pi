@@ -6,3 +6,7 @@ web/dist/
 .env
 .env.*
 .DS_Store
+
+# Corporate CA certificates (see certs/README.md)
+certs/*
+!certs/README.md
