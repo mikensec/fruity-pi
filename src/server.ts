@@ -18,6 +18,7 @@ import * as deploy from "./deploy.js";
 import * as pkgs from "./packages.js";
 import { startJob, listJobs, getJob, pool } from "./jobs.js";
 import { attachShell } from "./shell.js";
+import * as tokens from "./tokens.js";
 import * as system from "./system.js";
 import type { Instance, PackageEntry } from "./types.js";
 
@@ -26,6 +27,7 @@ const COOKIE = "fp_session";
 declare module "fastify" {
   interface FastifyRequest {
     session?: { token: string; csrf: string };
+    actor?: string;
     rawBody?: string;
   }
 }
@@ -119,7 +121,11 @@ export async function buildServer() {
   });
 
   // ---------------- auth gate
-  const PUBLIC = new Set(["/api/auth/me", "/api/auth/login", "/api/auth/setup", "/api/hooks/github"]);
+  const PUBLIC = new Set(["/api/auth/me", "/api/auth/login", "/api/auth/setup", "/api/hooks/github", "/api/agent"]);
+  /** Security-sensitive endpoints that API tokens may never call. */
+  const HUMAN_ONLY = ["/api/tokens", "/api/system/shell", "/api/system/password", "/api/system/totp", "/api/system/webhook", "/api/system/secrets", "/api/system/upgrade-pi", "/api/system/settings", "/api/system/cleanup", "/api/auth/"];
+  /** POST endpoints that don't change anything (allowed for read-only tokens). */
+  const READ_POSTS = new Set(["/api/collect", "/api/resolve", "/api/deployments/plan", "/api/packages/preview"]);
 
   function originOk(req: FastifyRequest) {
     const origin = req.headers.origin;
@@ -135,14 +141,25 @@ export async function buildServer() {
     const url = req.url.split("?")[0];
     if (!url.startsWith("/api/") && !url.startsWith("/ws")) return;
     if (PUBLIC.has(url)) return;
-    // Local CLI: bearer token from ~/.fruity-pi/cli.token (0600). Not a browser, so no CSRF/origin concerns.
+    // Bearer tokens: the local CLI token (~/.fruity-pi/cli.token, 0600) or an API token (fpi_…)
+    // created in System → API tokens. Not browsers, so no CSRF/origin checks; the web shell
+    // and security settings stay human-only (cookie session).
     const bearer = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
-    if (bearer && !url.startsWith("/ws")) {
+    if (bearer) {
+      if (url.startsWith("/ws/shell")) return reply.status(403).send({ error: "the web shell is not available to API tokens" });
       if (auth.safeEqual(bearer, cliToken())) {
         req.session = { token: "cli", csrf: "" };
+        req.actor = "cli";
         return;
       }
-      return reply.status(401).send({ error: "unauthorized" });
+      const tok = tokens.verifyToken(bearer);
+      if (!tok) return reply.status(401).send({ error: "unauthorized" });
+      req.session = { token: `api:${tok.id}`, csrf: "" };
+      req.actor = `token:${tok.id}`;
+      if (HUMAN_ONLY.some((p) => url.startsWith(p))) return reply.status(403).send({ error: "this endpoint requires an interactive login" });
+      const readOnlyOk = req.method === "GET" || READ_POSTS.has(url);
+      if (tok.scope === "read" && !readOnlyOk) return reply.status(403).send({ error: "read-only token" });
+      return;
     }
     const s = auth.getSession(req.cookies[COOKIE]);
     if (!s) return reply.status(401).send({ error: "unauthorized" });
@@ -155,7 +172,8 @@ export async function buildServer() {
     }
   });
 
-  const ip = (req: FastifyRequest) => req.ip;
+  /** Who did it, for the audit log: the client IP plus the API token name when one was used. */
+  const ip = (req: FastifyRequest) => (req.actor && req.actor !== "cli" ? `${req.ip} (${req.actor})` : req.ip);
 
   function setSessionCookie(reply: FastifyReply, token: string) {
     reply.setCookie(COOKIE, token, { httpOnly: true, sameSite: "strict", secure: useTls, path: "/", maxAge: 7 * 24 * 3600 });
@@ -375,9 +393,20 @@ export async function buildServer() {
           throw bad(`Unknown action ${action}`);
       }
     };
+    const wait = !!b.wait && ["prompt", "follow_up", "steer"].includes(action);
+    const timeoutMs = Math.min(3600, Math.max(1, Number(b.timeout ?? 600))) * 1000;
     const results = await pool(targets, 16, async (inst) => {
       try {
-        return { id: inst.id, name: inst.name, ...(await one(inst)) };
+        const mark = sup.settleMark(inst.id);
+        const res: Record<string, unknown> = { id: inst.id, name: inst.name, ...(await one(inst)) };
+        if (wait && res.ok && res.disposition !== "handled") {
+          const done = await sup.waitForSettleAfter(inst.id, mark, timeoutMs);
+          res.done = done;
+          res.status = sup.instanceView(sup.getInstance(inst.id)).status;
+          res.text = done ? await sup.collectLastText(inst.id) : null;
+          if (!done) res.error = "timed out or instance stopped before the run finished";
+        }
+        return res;
       } catch (e) {
         if (e instanceof HttpError) throw e;
         return { id: inst.id, name: inst.name, ok: false, error: (e as Error).message };
@@ -600,6 +629,37 @@ export async function buildServer() {
       });
     });
   }
+
+  // ---------------- API tokens (interactive login only; see HUMAN_ONLY)
+  app.get("/api/tokens", async () => ({ tokens: tokens.listTokens() }));
+  app.post("/api/tokens", async (req) => {
+    const b = (req.body ?? {}) as any;
+    requirePassword(req, b.password);
+    const r = tokens.createToken(String(b.name ?? ""), b.scope === "read" ? "read" : "full", b.ttlDays ? Number(b.ttlDays) : undefined);
+    audit("token.create", { token: r.token.id, scope: r.token.scope }, ip(req));
+    return r;
+  });
+  app.delete("/api/tokens/:id", async (req) => {
+    const { id } = req.params as { id: string };
+    tokens.revokeToken(id);
+    audit("token.revoke", { token: id }, ip(req));
+    return { ok: true };
+  });
+
+  // ---------------- agent discovery (public, no secrets): tells an AI agent how to use this server
+  app.get("/api/agent", async (req) => ({
+    name: "fruity-pi",
+    description: "Run and orchestrate many isolated pi coding-agent instances. Authenticate with 'Authorization: Bearer fpi_…' (create a token in System → API tokens).",
+    docs: "https://github.com/mikensec/fruity-pi/blob/main/docs/API.md",
+    skill: "https://github.com/mikensec/fruity-pi/blob/main/skills/fruity-pi/SKILL.md",
+    baseUrl: `${req.protocol}://${req.headers.host}`,
+    quickstart: [
+      "GET  /api/state                      → instances, profiles, repos, deployments",
+      "POST /api/send {selector, action:'prompt', message, wait:true} → answers per instance",
+      "PUT  /api/deployments {yaml, apply:true} → create/scale clusters",
+      "GET  /api/jobs/:id                   → progress of background jobs",
+    ],
+  }));
 
   // ---------------- jobs
   app.get("/api/jobs", async () => ({ jobs: listJobs() }));

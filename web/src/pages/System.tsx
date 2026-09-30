@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { get, post, setCsrf } from "../api";
+import { get, post, del, setCsrf } from "../api";
 import { useAppState, refresh } from "../store";
-import { JobLog, Switch, toast, toastError, fmtBytes, timeAgo, Modal } from "../ui";
+import { JobLog, Switch, toast, toastError, fmtBytes, timeAgo, Modal, copy } from "../ui";
 
 export interface SystemInfo {
   checks: { id: string; label: string; ok: boolean; detail?: string }[];
@@ -292,6 +292,8 @@ export function System() {
           </div>
         </div>
 
+        <ApiTokens />
+
         <div className="card">
           <div className="card-h">
             <h3>Audit log</h3>
@@ -401,5 +403,143 @@ function PasswordAction({ kind, onClose }: { kind: "shell" | "totp" | "totp-off"
         </>
       )}
     </Modal>
+  );
+}
+
+interface TokenRow {
+  id: string;
+  name: string;
+  scope: "full" | "read";
+  prefix: string;
+  createdAt: string;
+  lastUsedAt?: string;
+  expiresAt?: string;
+}
+
+function ApiTokens() {
+  const [list, setList] = useState<TokenRow[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [f, setF] = useState({ name: "", scope: "full", ttlDays: "", password: "" });
+  const [secret, setSecret] = useState<string>();
+  const load = () =>
+    get("/api/tokens")
+      .then((r) => setList(r.tokens))
+      .catch(toastError);
+  useEffect(() => {
+    load();
+  }, []);
+  const create = async () => {
+    try {
+      const r = await post("/api/tokens", { ...f, ttlDays: f.ttlDays ? Number(f.ttlDays) : undefined });
+      setSecret(r.secret);
+      setF({ name: "", scope: "full", ttlDays: "", password: "" });
+      load();
+    } catch (e) {
+      toastError(e);
+    }
+  };
+  const agentSnippet = secret ? `export FRUITY_PI_URL=${location.origin}\nexport FRUITY_PI_TOKEN=${secret}` : "";
+  return (
+    <div className="card">
+      <div className="card-h">
+        <h3>API tokens</h3>
+        <span className="muted small">for AI agents & scripts, see the fruity-pi skill in the repo</span>
+        <button className="btn sm primary right" onClick={() => setCreating(true)}>
+          + New token
+        </button>
+      </div>
+      <div className="card-b col">
+        {!list.length && <span className="muted small">No tokens yet. Agents authenticate with <span className="mono">Authorization: Bearer fpi_…</span>.</span>}
+        {list.map((t) => (
+          <div key={t.id} className="res">
+            <span className="mono small" style={{ fontWeight: 600 }}>
+              {t.name}
+            </span>
+            <span className={`badge ${t.scope === "full" ? "mango" : "kiwi"}`}>{t.scope === "full" ? "full access" : "read-only"}</span>
+            <span className="mono muted tiny">{t.prefix}…</span>
+            <span className="muted tiny grow">
+              used {timeAgo(t.lastUsedAt)}
+              {t.expiresAt ? ` · expires ${new Date(t.expiresAt).toLocaleDateString()}` : ""}
+            </span>
+            <button
+              className="btn sm danger"
+              onClick={() =>
+                del(`/api/tokens/${t.id}`)
+                  .then(load)
+                  .catch(toastError)
+              }
+            >
+              Revoke
+            </button>
+          </div>
+        ))}
+        <span className="muted tiny">Tokens can manage instances, deployments, repos and packages. They can never open the web shell, see secrets, change security settings, or mint more tokens.</span>
+      </div>
+      {creating && (
+        <Modal
+          title={secret ? "Token created" : "New API token"}
+          onClose={() => {
+            setCreating(false);
+            setSecret(undefined);
+          }}
+          footer={
+            secret ? (
+              <button
+                className="btn primary"
+                onClick={() => {
+                  setCreating(false);
+                  setSecret(undefined);
+                }}
+              >
+                Done
+              </button>
+            ) : (
+              <button className="btn primary" onClick={create} disabled={!f.name || !f.password}>
+                Create token
+              </button>
+            )
+          }
+        >
+          {secret ? (
+            <>
+              <div className="notice warn small">Copy it now. It won't be shown again.</div>
+              <div className="log">{agentSnippet}</div>
+              <div className="row">
+                <button className="btn" onClick={() => copy(secret)}>
+                  Copy token
+                </button>
+                <button className="btn" onClick={() => copy(agentSnippet)}>
+                  Copy env snippet
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid2">
+                <label className="field">
+                  Name
+                  <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="claude-orchestrator" autoFocus />
+                </label>
+                <label className="field">
+                  Scope
+                  <select value={f.scope} onChange={(e) => setF({ ...f, scope: e.target.value })}>
+                    <option value="full">Full: run and manage agents</option>
+                    <option value="read">Read-only: view state & collect answers</option>
+                  </select>
+                </label>
+                <label className="field">
+                  Expires after (days) <span className="hint">blank = never</span>
+                  <input type="number" min={1} value={f.ttlDays} onChange={(e) => setF({ ...f, ttlDays: e.target.value })} />
+                </label>
+                <label className="field">
+                  Your password
+                  <input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} onKeyDown={(e) => e.key === "Enter" && create()} />
+                </label>
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
+    </div>
   );
 }

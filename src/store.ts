@@ -2,12 +2,14 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { paths, ensureDir } from "./paths.js";
 import type { Deployment, Instance, Profile, Repo } from "./types.js";
+import type { ApiToken } from "./tokens.js";
 
 interface Kinds {
   profile: Profile;
   instance: Instance;
   repo: Repo;
   deployment: Deployment;
+  token: ApiToken;
 }
 type Kind = keyof Kinds;
 

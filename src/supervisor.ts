@@ -32,6 +32,8 @@ const runtimes = new Map<string, Runtime>();
 const running = new Set<string>(); // instances with an active agent run (holding a concurrency slot)
 const promptQueue: { id: string; cmd: Record<string, unknown> }[] = [];
 const TAIL_CHARS = 4000;
+/** Number of agent_settled events seen per instance; lets callers wait for "the run I started". */
+const settledCount = new Map<string, number>();
 const MAX_EVENT_LOG = 20 * 1024 * 1024;
 
 function rt(id: string): Runtime {
@@ -149,6 +151,7 @@ function onEvent(id: string, ev: any) {
       setStatus(id, "running");
       break;
     case "agent_settled":
+      settledCount.set(id, (settledCount.get(id) ?? 0) + 1);
       running.delete(id);
       setStatus(id, "idle");
       afterSettle(id);
@@ -522,6 +525,28 @@ function drainQueue() {
     if (!r.rpc || r.rpc.exited) continue;
     void dispatch(next.id, next.cmd);
   }
+}
+
+export function settleMark(id: string) {
+  return settledCount.get(id) ?? 0;
+}
+
+/**
+ * Resolve once the instance has settled at least once after `mark`
+ * (i.e. the run started by a prompt sent after taking the mark has finished).
+ */
+export function waitForSettleAfter(id: string, mark: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      const r = rt(id);
+      if ((settledCount.get(id) ?? 0) > mark) return resolve(true);
+      if (!r.rpc || r.rpc.exited || r.status === "error" || r.status === "stopped") return resolve(false);
+      if (Date.now() - start > timeoutMs) return resolve(false);
+      setTimeout(tick, 250);
+    };
+    tick();
+  });
 }
 
 export async function collectLastText(id: string) {

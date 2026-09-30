@@ -11,6 +11,22 @@ Run a whole orchard of [pi](https://github.com/earendil-works/pi) coding agents 
 - **Concurrency cap.** Prompts beyond `maxConcurrent` queue automatically, so 50 instances don't hammer your rate limits.
 - **Easy install.** `./install.sh` installs Node if needed, then pi, the build and a systemd user service. The in-browser setup checklist covers the rest.
 
+## For AI agents
+
+Claude or any other agent can drive fruity-pi over its REST API:
+
+1. Create a token: **System → API tokens**, or `fruity-pi token create my-agent`.
+2. Give the agent `FRUITY_PI_URL` and `FRUITY_PI_TOKEN`.
+3. Point it at [`AGENTS.md`](AGENTS.md), or install the skill: `cp -r skills/fruity-pi ~/.claude/skills/`. The skill includes `fpi`, a bash + curl client.
+
+Full reference: [`docs/API.md`](docs/API.md). A running server also describes itself at `GET /api/agent`.
+
+```bash
+fpi ask cluster:reviewers "Review src/auth for injection bugs"   # prompt a whole cluster and wait for every answer
+```
+
+Tokens are hashed at rest, can be read-only or expiring, and are audit-logged by name. They can never open the shell, read secrets, change security settings or create more tokens.
+
 ## Install
 
 ```bash

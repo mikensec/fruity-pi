@@ -14,6 +14,8 @@ Usage:
   fruity-pi collect <selector>         Print the last answer from each matched instance
   fruity-pi apply <spec.yaml>          Save + apply a deployment spec
   fruity-pi plan <spec.yaml>           Show what apply would do
+  fruity-pi token create <name> [--read] [--days N]   Create an API token for an agent (printed once)
+  fruity-pi token ls | revoke <name>   List / revoke API tokens
 
 State lives in ${paths.root} (override with FRUITY_PI_HOME).`;
 
@@ -128,6 +130,26 @@ async function main() {
         const r = await api("PUT", "/api/deployments", { yaml, apply: true });
         console.log(`Applying ${r.deployment.name}: ${r.steps.length} step(s). Job ${r.job.id} — follow it in the dashboard.`);
       }
+      return;
+    }
+    case "token": {
+      process.removeAllListeners("warning");
+      const tokens = await import("./tokens.js");
+      const sub = args[0];
+      if (sub === "create" && args[1]) {
+        const d = args.indexOf("--days");
+        const r = tokens.createToken(args[1], args.includes("--read") ? "read" : "full", d >= 0 ? Number(args[d + 1]) : undefined);
+        const { audit } = await import("./audit.js");
+        audit("token.create", { token: r.token.id, scope: r.token.scope, via: "cli" });
+        console.log(`Token "${r.token.id}" (${r.token.scope}). Shown once:\n\n  export FRUITY_PI_TOKEN=${r.secret}\n`);
+      } else if (sub === "ls") {
+        for (const t of tokens.listTokens()) console.log(`${t.id.padEnd(24)} ${t.scope.padEnd(5)} ${t.prefix}…  last used ${t.lastUsedAt ?? "never"}`);
+      } else if (sub === "revoke" && args[1]) {
+        tokens.revokeToken(args[1]);
+        const { audit } = await import("./audit.js");
+        audit("token.revoke", { token: args[1], via: "cli" });
+        console.log(`Revoked ${args[1]}`);
+      } else throw new Error("usage: fruity-pi token create <name> [--read] [--days N] | ls | revoke <name>");
       return;
     }
     default:

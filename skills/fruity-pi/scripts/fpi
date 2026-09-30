@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# fpi: tiny client for the fruity-pi REST API, made for AI agents and scripts.
+# Needs: bash, curl. Uses jq for pretty output when available.
+#
+#   export FRUITY_PI_URL=http://127.0.0.1:7777     # default
+#   export FRUITY_PI_TOKEN=fpi_...                  # System → API tokens, or: fruity-pi token create my-agent
+#
+# Run `fpi help` for commands.
+set -euo pipefail
+
+URL="${FRUITY_PI_URL:-http://127.0.0.1:7777}"
+URL="${URL%/}"
+TOKEN="${FRUITY_PI_TOKEN:-}"
+if [ -z "$TOKEN" ] && [ -r "${FRUITY_PI_HOME:-$HOME/.fruity-pi}/cli.token" ]; then
+  TOKEN="$(cat "${FRUITY_PI_HOME:-$HOME/.fruity-pi}/cli.token")"   # same-machine fallback
+fi
+CURL_OPTS=(-sS --max-time "${FPI_TIMEOUT:-3700}")
+[ "${FRUITY_PI_INSECURE:-}" = "1" ] && CURL_OPTS+=(-k)   # self-signed TLS
+
+die() { echo "fpi: $*" >&2; exit 1; }
+[ -n "$TOKEN" ] || die "set FRUITY_PI_TOKEN (create one in System → API tokens or with 'fruity-pi token create <name>')"
+
+pretty() { if command -v jq >/dev/null; then jq "${@:-.}"; else cat; fi; }
+
+# JSON-encode a string without jq (handles quotes, backslashes, newlines, tabs).
+jstr() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\r'/\\r}"; s="${s//$'\t'/\\t}"
+  printf '"%s"' "$s"
+}
+
+api() { # api METHOD PATH [JSON]
+  local method="$1" path="$2" body="${3:-}" out code
+  out="$(mktemp)"
+  if [ -n "$body" ]; then
+    code="$(curl "${CURL_OPTS[@]}" -o "$out" -w '%{http_code}' -X "$method" -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' --data-binary "$body" "$URL$path")"
+  else
+    code="$(curl "${CURL_OPTS[@]}" -o "$out" -w '%{http_code}' -X "$method" -H "authorization: Bearer $TOKEN" "$URL$path")"
+  fi
+  if [ "$code" -ge 400 ]; then cat "$out" >&2; echo >&2; rm -f "$out"; die "$method $path → HTTP $code"; fi
+  cat "$out"; rm -f "$out"
+}
+
+wait_job() { # wait_job ID
+  local id="$1" st
+  while :; do
+    st="$(api GET "/api/jobs/$id")"
+    case "$st" in
+      *'"status":"running"'*) sleep 2 ;;
+      *'"status":"failed"'*) echo "$st" | pretty '{status, error, log: .log[-20:]}'; return 1 ;;
+      *) echo "$st" | pretty '{status, title, log: .log[-20:]}'; return 0 ;;
+    esac
+  done
+}
+
+job_id() { sed -n 's/.*"job":{"id":"\([^"]*\)".*/\1/p' | head -1; }
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  help|-h|--help)
+    cat <<'EOF'
+fpi: fruity-pi API client
+
+State
+  fpi state                              full JSON state (instances, profiles, repos, deployments, stats)
+  fpi ls                                 one line per instance: name status cluster profile model
+  fpi instance <name>                    details + the command to run it interactively
+  fpi events <name> [N]                  last N raw pi events (default 200)
+  fpi skills <name>                      skills/commands loaded in an instance
+
+Commanding agents (selector: all | cluster:x | deployment:x | profile:x | name | glob*, comma-separated)
+  fpi ask <selector> <message…>          prompt and WAIT; prints each instance's final answer
+  fpi send <selector> <message…>         prompt, don't wait
+  fpi steer <selector> <message…>        redirect an in-flight run
+  fpi abort <selector>
+  fpi collect <selector>                 last answer from each instance
+  fpi do <selector> <action>             start | stop | restart | new_session | compact
+
+Fleet
+  fpi plan <spec.yaml>                   preview a deployment
+  fpi apply <spec.yaml>                  save + apply a deployment, wait for it
+  fpi scale <deployment> <cluster> <n>   set replicas and apply
+  fpi create <profile> <count> [cluster] create ad-hoc instances
+  fpi rm <name>                          delete an instance
+  fpi profile <id> <file.json>           create/replace a profile from JSON
+  fpi rollout <profile>                  re-provision all instances of a profile
+
+Skills & packages
+  fpi repo-add <url> [ref] [id]          track a git repo of skills (auto-updates everywhere)
+  fpi repo-check <id>                    check a tracked repo for new commits now
+  fpi search <query>                     search the pi package catalog
+  fpi install <source> <scopeKind> <value>   e.g. fpi install npm:pi-web-access cluster reviewers
+  fpi uninstall <source> <scopeKind> <value> scopeKind: profile|cluster|deployment|instance|all
+
+Other
+  fpi jobs | fpi job <id> [--wait]
+  fpi raw <METHOD> <path> [json]         any endpoint (see docs/API.md)
+EOF
+    ;;
+  state) api GET /api/state | pretty ;;
+  ls)
+    api GET /api/state | { if command -v jq >/dev/null; then jq -r '.instances[] | [.name, .status, (.cluster // "-"), .profile, (.modelLabel // "-")] | @tsv' | column -t; else cat; fi; } ;;
+  instance) api GET "/api/instances/${1:?name}" | pretty ;;
+  events) api GET "/api/instances/${1:?name}/events?tail=${2:-200}" | pretty ;;
+  skills) api GET "/api/instances/${1:?name}/commands" | pretty '[.commands[] | select(.name|startswith("skill:")) | {name, description}]' ;;
+  ask|send|steer)
+    sel="${1:?selector}"; shift; msg="$*"; [ -n "$msg" ] || die "message required"
+    action=prompt; [ "$cmd" = steer ] && action=steer
+    wait=false; [ "$cmd" = ask ] && wait=true
+    r="$(api POST /api/send "{\"selector\":$(jstr "$sel"),\"action\":\"$action\",\"message\":$(jstr "$msg"),\"wait\":$wait,\"timeout\":${FPI_WAIT:-900}}")"
+    if [ "$cmd" = ask ] && command -v jq >/dev/null; then
+      echo "$r" | jq -r '.results[] | "=== \(.name) [\(if .ok and .done then "done" elif .ok then "not finished" else "error" end)]\n\(.text // .error // "")\n"'
+    else echo "$r" | pretty; fi ;;
+  abort) api POST /api/send "{\"selector\":$(jstr "${1:?selector}"),\"action\":\"abort\"}" | pretty ;;
+  do) api POST /api/send "{\"selector\":$(jstr "${1:?selector}"),\"action\":$(jstr "${2:?action}")}" | pretty ;;
+  collect)
+    r="$(api POST /api/collect "{\"selector\":$(jstr "${1:-all}")}")"
+    if command -v jq >/dev/null; then echo "$r" | jq -r '.results[] | "=== \(.name) [\(.status)]\n\(.text // "(no answer yet)")\n"'; else echo "$r"; fi ;;
+  plan)
+    body="{\"yaml\":$(jstr "$(cat "${1:?spec.yaml}")")}"
+    api POST /api/deployments/plan "$body" | pretty '.steps' ;;
+  apply)
+    body="{\"yaml\":$(jstr "$(cat "${1:?spec.yaml}")"),\"apply\":true}"
+    r="$(api PUT /api/deployments "$body")"; echo "$r" | pretty '.steps'
+    id="$(echo "$r" | job_id)"; [ -n "$id" ] && wait_job "$id" ;;
+  scale)
+    dep="${1:?deployment}" cl="${2:?cluster}" n="${3:?replicas}"
+    command -v jq >/dev/null || die "scale needs jq"
+    yaml="$(api GET /api/state | jq -r --arg d "$dep" '.deployments[] | select(.name==$d) | .yaml')"
+    [ -n "$yaml" ] || die "no deployment $dep"
+    # Rewrite replicas for the matching cluster (simple YAML produced by fruity-pi / the docs).
+    yaml="$(printf '%s\n' "$yaml" | awk -v c="$cl" -v n="$n" '
+      /^[[:space:]]*-[[:space:]]*cluster:/ { inside = ($NF == c) }
+      inside && /^[[:space:]]*replicas:/ { sub(/replicas:.*/, "replicas: " n); inside = 0 }
+      { print }')"
+    r="$(api PUT /api/deployments "{\"yaml\":$(jstr "$yaml"),\"apply\":true}")"; echo "$r" | pretty '.steps'
+    id="$(echo "$r" | job_id)"; [ -n "$id" ] && wait_job "$id" ;;
+  create)
+    body="{\"profile\":$(jstr "${1:?profile}"),\"count\":${2:-1}${3:+,\"cluster\":$(jstr "$3")}}"
+    r="$(api POST /api/instances "$body")"; echo "$r" | pretty
+    id="$(echo "$r" | job_id)"; [ -n "$id" ] && wait_job "$id" ;;
+  rm) api POST "/api/instances/${1:?name}/delete" | pretty ;;
+  profile) api PUT "/api/profiles/${1:?id}" "$(cat "${2:?file.json}")" | pretty ;;
+  rollout) r="$(api POST "/api/profiles/${1:?profile}/rollout")"; id="$(echo "$r" | job_id)"; [ -n "$id" ] && wait_job "$id" ;;
+  repo-add)
+    body="{\"url\":$(jstr "${1:?url}"),\"ref\":$(jstr "${2:-main}")${3:+,\"id\":$(jstr "$3")}}"
+    r="$(api POST /api/repos "$body")"; echo "$r" | pretty '.repo'
+    id="$(echo "$r" | job_id)"; [ -n "$id" ] && wait_job "$id" ;;
+  repo-check) r="$(api POST "/api/repos/${1:?id}/check")"; wait_job "$(echo "$r" | job_id)" ;;
+  search)
+    q="$*"; q="${q// /%20}"
+    api GET "/api/packages/search?q=$q" | pretty -r '.results[] | "\(.name)@\(.version)  \(.description // "")"' ;;
+  install|uninstall)
+    action=install; [ "$cmd" = uninstall ] && action=remove
+    src="${1:?source}" kind="${2:?scope kind}" val="${3:-all}"
+    r="$(api POST /api/packages/action "{\"action\":\"$action\",\"source\":$(jstr "$src"),\"scope\":{\"kind\":$(jstr "$kind"),\"value\":$(jstr "$val")}}")"
+    echo "$r" | pretty '{skipped}'
+    id="$(echo "$r" | job_id)"; [ -n "$id" ] && wait_job "$id" ;;
+  jobs) api GET /api/jobs | pretty '.jobs[:15] | map({id, status, title})' ;;
+  job) if [ "${2:-}" = "--wait" ]; then wait_job "${1:?id}"; else api GET "/api/jobs/${1:?id}" | pretty; fi ;;
+  raw) api "${1:?METHOD}" "${2:?path}" "${3:-}" | pretty ;;
+  *) die "unknown command '$cmd' (try: fpi help)" ;;
+esac

@@ -11,11 +11,11 @@
     "url": "https://github.com/mikensec/fruity-pi/issues"
   },
   "keywords": [
+    "ai-agents",
+    "dashboard",
+    "orchestration",
     "pi",
     "pi-coding-agent",
-    "ai-agents",
-    "orchestration",
-    "dashboard",
     "skills"
   ],
   "type": "module",

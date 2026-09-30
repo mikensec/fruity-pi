@@ -1,0 +1,8 @@
+# fruity-pi
+
+> Web dashboard + REST API to run, isolate, deploy and orchestrate many pi coding-agent instances on one machine.
+
+- [README](README.md): what it is, install, containers, EC2 + Bedrock, security model
+- [AGENTS.md](AGENTS.md): instructions for AI agents using or developing fruity-pi
+- [API reference](docs/API.md): every endpoint, selectors, jobs, auth scopes, examples
+- [Agent skill](skills/fruity-pi/SKILL.md): workflows for orchestrating pi fleets, with the `fpi` CLI client

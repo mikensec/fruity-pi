@@ -190,6 +190,44 @@ async function main() {
   assert.ok(stats.peak <= 2, `LLM saw at most 2 concurrent requests (peak ${stats.peak})`);
   log(`concurrency cap ok (peak ${stats.peak})`);
 
+  // ---- agent API: tokens, scopes, human-only endpoints, send+wait, fpi client
+  await api("POST", "/api/system/settings", { maxConcurrent: 8 });
+  const mint = (name: string, extra: string[] = []) =>
+    execFileSync(tsx, ["src/cli.ts", "token", "create", name, ...extra], { env }).toString().match(/FRUITY_PI_TOKEN=(fpi_\S+)/)![1];
+  const full = mint("agent-full");
+  const read = mint("agent-read", ["--read"]);
+  const as = (tok: string, method: string, route: string, body?: unknown) =>
+    fetch(BASE + route, { method, headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  assert.equal((await fetch(BASE + "/api/agent")).status, 200, "discovery is public");
+  assert.equal((await as(full, "GET", "/api/state")).status, 200);
+  for (const [m, r, b] of [
+    ["POST", "/api/tokens", { name: "x", password: "e2e-password-123" }],
+    ["POST", "/api/system/shell", { enabled: true, password: "e2e-password-123" }],
+    ["POST", "/api/system/secrets", { X: "y" }],
+    ["POST", "/api/system/settings", { maxConcurrent: 1 }],
+  ] as const)
+    assert.equal((await as(full, m, r, b)).status, 403, `${r} is human-only`);
+  assert.equal((await as(read, "POST", "/api/send", { selector: "all", action: "abort" })).status, 403, "read token can't act");
+  assert.equal((await as(read, "POST", "/api/collect", { selector: "all" })).status, 200, "read token can collect");
+  const shellWs = await as(full, "GET", "/ws/shell");
+  assert.equal(shellWs.status, 403, "no shell for tokens");
+  const waited: any = await (await as(full, "POST", "/api/send", { selector: "cluster:b", action: "prompt", message: "waited hello", wait: true, timeout: 60 })).json();
+  assert.equal(waited.results.length, 2);
+  for (const r of waited.results) {
+    assert.equal(r.done, true);
+    assert.match(r.text, /ECHO: waited hello \| SKILLS: bravo/);
+  }
+  const fpiOut = execFileSync("bash", ["skills/fruity-pi/scripts/fpi", "ask", "a-1", "hello from fpi"], {
+    env: { ...process.env, FRUITY_PI_URL: BASE, FRUITY_PI_TOKEN: full, FRUITY_PI_HOME: "/nonexistent" },
+  }).toString();
+  assert.match(fpiOut, /ECHO: hello from fpi/, fpiOut);
+  const fpiLs = execFileSync("bash", ["skills/fruity-pi/scripts/fpi", "ls"], { env: { ...process.env, FRUITY_PI_URL: BASE, FRUITY_PI_TOKEN: read } }).toString();
+  assert.match(fpiLs, /a-1/);
+  execFileSync(tsx, ["src/cli.ts", "token", "revoke", "agent-read"], { env });
+  assert.equal((await as(read, "GET", "/api/state")).status, 401, "revoked token rejected");
+  assert.match(fs.readFileSync(path.join(HOME, "audit.log"), "utf8"), /token:agent-full/, "audit records the token");
+  log("agent API ok (tokens, scopes, send+wait, fpi)");
+
   // ---- package manager: disable a skill at profile scope
   const inst = await api("GET", "/api/packages/installed");
   const pkgA = inst.packages.find((p: any) => p.tracked === "skills-a");
