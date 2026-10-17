@@ -10,6 +10,8 @@ import { configHash, getProfile, ID_RE } from "./profiles.js";
 import { ensureInstanceDirs, provisionInstance } from "./packages.js";
 import { startJob, pool, type JobCtx } from "./jobs.js";
 import type { Instance, InstanceStatus, PackageEntry, Profile } from "./types.js";
+import { providerForModel, providerWaitMs, budgetExceeded, isRateLimitError } from "./scheduling.js";
+import { randomUUID } from "node:crypto";
 
 interface Runtime {
   rpc?: PiRpc;
@@ -30,7 +32,49 @@ interface Runtime {
 
 const runtimes = new Map<string, Runtime>();
 const running = new Set<string>(); // instances with an active agent run (holding a concurrency slot)
-const promptQueue: { id: string; cmd: Record<string, unknown> }[] = [];
+const promptQueue = () => store.list("queuedPrompt").sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+const starts = new Map<string, number[]>();
+const cooldowns = new Map<string, number>();
+let drainTimer: ReturnType<typeof setTimeout> | undefined;
+function provider(id: string): string {
+  const inst = store.get("instance", id);
+  const profile = inst ? store.get("profile", inst.profile) : undefined;
+  return providerForModel(inst?.model ?? profile?.model);
+}
+function spentToday(): number {
+  return store.get("dailyUsage", new Date().toISOString().slice(0, 10))?.cost ?? 0;
+}
+function scheduleDrain(wait: number) {
+  if (!Number.isFinite(wait) || wait <= 0) return;
+  if (drainTimer) return;
+  drainTimer = setTimeout(() => { drainTimer = undefined; drainQueue(); }, wait);
+  drainTimer.unref?.();
+}
+function canAdmit(id: string): boolean {
+  const config = loadConfig();
+  if (running.size >= config.maxConcurrent) return false;
+  if (budgetExceeded(spentToday(), config.maxDailyCostUsd)) {
+    scheduleDrain(Math.max(1000, Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z") + 86400000 - Date.now()));
+    return false;
+  }
+  const key = provider(id);
+  const now = Date.now();
+  const window = (starts.get(key) ?? []).filter((t) => t > now - 60000);
+  starts.set(key, window);
+  const active = [...running].filter((name) => provider(name) === key).length;
+  const wait = providerWaitMs(config.providerLimits?.[key], active, window, now, cooldowns.get(key));
+  if (wait !== null) {
+    scheduleDrain(wait);
+    return false;
+  }
+  return true;
+}
+function enqueue(id: string, message: string) {
+  const q = { id: randomUUID(), instanceId: id, message, createdAt: new Date().toISOString() };
+  store.put("queuedPrompt", q.id, q);
+  setStatus(id, "queued");
+}
+
 const TAIL_CHARS = 4000;
 /** Number of agent_settled events seen per instance; lets callers wait for "the run I started". */
 const settledCount = new Map<string, number>();
@@ -70,7 +114,7 @@ export function instanceView(inst: Instance) {
     pendingRestart: !!r.pendingRestart,
     configDrift: profile ? inst.configHash !== configHash(inst, profile) : false,
     repoDrift,
-    queuePosition: promptQueue.findIndex((q) => q.id === inst.id) + 1 || undefined,
+    queuePosition: promptQueue().findIndex((q) => q.instanceId === inst.id) + 1 || undefined,
     stderrTail: r.stderrTail.slice(-20),
   };
 }
@@ -105,7 +149,7 @@ export function stats() {
   const all = [...runtimes.values()];
   return {
     running: running.size,
-    queued: promptQueue.length,
+    queued: promptQueue().length,
     maxConcurrent: loadConfig().maxConcurrent,
     live: all.filter((r) => r.rpc && !r.rpc.exited).length,
     cost: all.reduce((a, r) => a + r.cost, 0),
@@ -172,10 +216,19 @@ function onEvent(id: string, ev: any) {
       const u = ev.message?.usage;
       if (u) {
         r.tokens += (u.input ?? 0) + (u.output ?? 0);
-        r.cost += typeof u.cost === "number" ? u.cost : (u.cost?.total ?? 0);
+        const cost = typeof u.cost === "number" ? u.cost : (u.cost?.total ?? 0);
+        r.cost += cost;
+        if (Number.isFinite(cost) && cost > 0) {
+          const day = new Date().toISOString().slice(0, 10);
+          store.put("dailyUsage", day, { id: day, cost: (store.get("dailyUsage", day)?.cost ?? 0) + cost });
+        }
       }
       if (ev.message?.role === "assistant" && ev.message?.stopReason === "error" && ev.message?.errorMessage) {
         pushTail(r, `\n⚠ ${ev.message.errorMessage}\n`);
+        if (isRateLimitError(ev.message.errorMessage)) {
+          cooldowns.set(provider(id), Date.now() + 60000);
+          scheduleDrain(60000);
+        }
       }
       break;
     }
@@ -288,7 +341,8 @@ async function startInstanceInner(id: string): Promise<void> {
     if (sha) repoShas[rid] = sha;
   }
   store.update("instance", inst.id, { repoShas, lastError: undefined, desired: "running" });
-  setStatus(inst.id, state.data?.isStreaming ? "running" : "idle");
+  if (state.data?.isStreaming) running.add(inst.id);
+  setStatus(inst.id, state.data?.isStreaming ? "running" : (promptQueue().some(q => q.instanceId === inst.id) ? "queued" : "idle"));
   drainQueue();
 }
 
@@ -319,7 +373,7 @@ export async function stopInstance(id: string, persistDesired = true) {
   const inst = getInstance(id);
   const r = rt(inst.id);
   if (persistDesired) store.update("instance", inst.id, { desired: "stopped" });
-  for (let i = promptQueue.length - 1; i >= 0; i--) if (promptQueue[i].id === inst.id) promptQueue.splice(i, 1);
+  for (const q of promptQueue()) if (q.instanceId === inst.id) store.delete("queuedPrompt", q.id);
   if (!r.rpc || r.rpc.exited) {
     setStatus(inst.id, "stopped");
     return;
@@ -488,42 +542,49 @@ export async function rpcCall(id: string, cmd: Record<string, unknown>, timeoutM
   return r.rpc.send(cmd, timeoutMs);
 }
 
-/**
- * Send a prompt honoring the global concurrency cap. If the instance is already
- * mid-run it goes straight to pi (which queues it itself).
- */
+/** Queue prompts whenever capacity is unavailable; preserve FIFO per instance. */
 export async function sendPrompt(id: string, message: string): Promise<{ ok: boolean; disposition?: string; error?: string }> {
   const inst = getInstance(id);
   const r = rt(inst.id);
   if (!r.rpc || r.rpc.exited) return { ok: false, error: "instance not running" };
-  const cmd = { type: "prompt", message };
-  if (r.status !== "running" && running.size >= loadConfig().maxConcurrent) {
-    promptQueue.push({ id: inst.id, cmd });
-    setStatus(inst.id, "queued");
+  if (r.status === "running" || r.status === "queued" || promptQueue().length || !canAdmit(inst.id)) {
+    enqueue(inst.id, message);
+    drainQueue();
     return { ok: true, disposition: "queued-by-fruity-pi" };
   }
-  return dispatch(inst.id, cmd);
+  return dispatch(inst.id, { type: "prompt", message });
 }
 
 async function dispatch(id: string, cmd: Record<string, unknown>) {
-  running.add(id); // reserve the slot before pi replies
+  const key = provider(id);
+  const now = Date.now();
+  starts.set(key, [...(starts.get(key) ?? []).filter(t => t > now - 60000), now]);
+  running.add(id); // reserve capacity before RPC acknowledges
+  setStatus(id, "running");
   const res = await rpcCall(id, cmd);
   const disposition = res.data?.disposition as string | undefined;
   if (!res.success || disposition === "handled") {
-    if (rt(id).status !== "running") running.delete(id);
-    if (rt(id).status === "queued") setStatus(id, "idle");
+    if (rt(id).status !== "running" || !res.success) {
+      running.delete(id);
+      setStatus(id, "idle");
+      drainQueue();
+    }
   }
   if (!res.success) appendEvent(id, { type: "fp_error", command: cmd.type, error: res.error });
+  if (!res.success && isRateLimitError(res.error ?? "")) {
+    cooldowns.set(key, Date.now() + 60000);
+    scheduleDrain(60000);
+  }
   return { ok: res.success, disposition, error: res.error };
 }
 
 function drainQueue() {
-  const max = loadConfig().maxConcurrent;
-  while (promptQueue.length && running.size < max) {
-    const next = promptQueue.shift()!;
-    const r = rt(next.id);
-    if (!r.rpc || r.rpc.exited) continue;
-    void dispatch(next.id, next.cmd);
+  // Skip blocked providers instead of stopping the entire fleet.
+  for (const q of promptQueue()) {
+    const r = rt(q.instanceId);
+    if (!r.rpc || r.rpc.exited || running.has(q.instanceId) || !canAdmit(q.instanceId)) continue;
+    store.delete("queuedPrompt", q.id); // at-most-once handoff; do not replay uncertain API calls
+    void dispatch(q.instanceId, { type: "prompt", message: q.message });
   }
 }
 
@@ -562,6 +623,7 @@ export async function bootInstances() {
 }
 
 export async function shutdownAll() {
+  if (drainTimer) clearTimeout(drainTimer);
   await Promise.all(
     [...runtimes.entries()].map(async ([, r]) => {
       if (r.rpc && !r.rpc.exited) {
