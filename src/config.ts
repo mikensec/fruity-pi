@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { paths, ensureDir } from "./paths.js";
+import type { ProviderLimit } from "./scheduling.js";
 
 export interface Config {
   host: string;
@@ -10,6 +11,10 @@ export interface Config {
   tls?: { cert: string; key: string };
   /** Max prompts running at once across all instances; the rest queue. */
   maxConcurrent: number;
+  /** Optional turn-level gates keyed by model provider (e.g. anthropic, openai). */
+  providerLimits: Record<string, ProviderLimit>;
+  /** Stop admitting new turns after reported daily spending reaches this limit (UTC). */
+  maxDailyCostUsd: number;
   /** Web shell is off until enabled from the System page (password re-entry). */
   shellEnabled: boolean;
   /** Hard lock: when true the shell can never be enabled from the UI. */
@@ -32,6 +37,8 @@ const DEFAULTS: Config = {
   port: 7777,
   allowRemote: false,
   maxConcurrent: 8,
+  providerLimits: {},
+  maxDailyCostUsd: 0,
   shellEnabled: false,
   shellLocked: false,
   recordShell: false,
@@ -75,6 +82,8 @@ export function safeConfig(c = loadConfig()) {
     allowRemote: c.allowRemote,
     tls: !!c.tls,
     maxConcurrent: c.maxConcurrent,
+    providerLimits: c.providerLimits,
+    maxDailyCostUsd: c.maxDailyCostUsd,
     shellEnabled: c.shellEnabled && !c.shellLocked,
     shellLocked: c.shellLocked,
     recordShell: c.recordShell,
