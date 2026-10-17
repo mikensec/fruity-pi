@@ -365,7 +365,7 @@ export async function buildServer() {
         case "steer":
         case "follow_up":
           if (!message.trim()) throw bad("message is required");
-          return wrap(await sup.rpcCall(inst.id, { type: action, message }));
+          return sup.sendPrompt(inst.id, message);
         case "abort":
           return wrap(await sup.rpcCall(inst.id, { type: "abort" }, 60_000));
         case "new_session":
@@ -707,6 +707,27 @@ export async function buildServer() {
       const n = Number(b.maxConcurrent);
       if (!Number.isInteger(n) || n < 1 || n > 256) throw bad("maxConcurrent must be 1–256");
       patch.maxConcurrent = n;
+    }
+    if (b.providerLimits != null) {
+      if (!b.providerLimits || typeof b.providerLimits !== "object" || Array.isArray(b.providerLimits)) throw bad("providerLimits must be an object");
+      const normalized: Record<string, { maxConcurrent?: number; maxStartsPerMinute?: number }> = {};
+      for (const [provider, limits] of Object.entries(b.providerLimits) as [string, any][]) {
+        if (!/^[a-z0-9_-]{1,80}$/.test(provider) || !limits || typeof limits !== "object" || Array.isArray(limits)) throw bad("invalid provider limit");
+        const result: { maxConcurrent?: number; maxStartsPerMinute?: number } = {};
+        for (const key of Object.keys(limits)) {
+          if (!["maxConcurrent", "maxStartsPerMinute"].includes(key)) throw bad("unknown provider limit field");
+          const n = limits[key];
+          if (!Number.isInteger(n) || n < 1 || n > 100000) throw bad("provider limits must be positive integers");
+          result[key as "maxConcurrent" | "maxStartsPerMinute"] = n;
+        }
+        normalized[provider] = result;
+      }
+      patch.providerLimits = normalized;
+    }
+    if (b.maxDailyCostUsd != null) {
+      const n = Number(b.maxDailyCostUsd);
+      if (!Number.isFinite(n) || n < 0 || n > 1000000) throw bad("maxDailyCostUsd must be between 0 and 1,000,000");
+      patch.maxDailyCostUsd = n;
     }
     if (b.recordShell != null) patch.recordShell = !!b.recordShell;
     saveConfig(patch);
