@@ -4,7 +4,12 @@ import { paths, ensureDir } from "./paths.js";
 import type { Deployment, Instance, Profile, Repo } from "./types.js";
 import type { ApiToken } from "./tokens.js";
 
+export interface QueuedPrompt { id: string; instanceId: string; message: string; createdAt: string; }
+export interface DailyUsage { id: string; cost: number; }
+
 interface Kinds {
+  queuedPrompt: QueuedPrompt;
+  dailyUsage: DailyUsage;
   profile: Profile;
   instance: Instance;
   repo: Repo;
