@@ -229,3 +229,30 @@ test("auth: scrypt roundtrip, TOTP, lockout", () => {
 });
 
 test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));
+
+test("provider policy: concurrency, rolling minute and cooldown", async () => {
+  const { providerForModel, providerWaitMs, isRateLimitError, budgetExceeded } = await import("../src/scheduling.js");
+  assert.equal(providerForModel("anthropic/claude"), "anthropic");
+  assert.equal(providerForModel(""), "unknown");
+  const now = 100000;
+  const limits = { maxConcurrent: 2, maxStartsPerMinute: 3 };
+  assert.equal(providerWaitMs(limits, 2, [], now), Infinity);
+  assert.equal(providerWaitMs(limits, 1, [now - 30000, now - 20000, now - 10000], now), 30000);
+  assert.equal(providerWaitMs(limits, 1, [], now, now + 9000), 9000);
+  assert.equal(providerWaitMs(limits, 1, [now - 61000, now - 100], now), null);
+  assert.ok(isRateLimitError("HTTP 429 Too Many Requests"));
+  assert.ok(isRateLimitError("ThrottlingException"));
+  assert.ok(!isRateLimitError("connection refused"));
+  assert.equal(budgetExceeded(5, 5), true);
+  assert.equal(budgetExceeded(5, 0), false);
+});
+
+test("queued prompts and daily usage persist in SQLite", () => {
+  const id = "test-queue-entry";
+  store.put("queuedPrompt", id, { id, instanceId: "reviewer", message: "Review A", createdAt: new Date().toISOString() });
+  assert.equal(store.get("queuedPrompt", id)?.message, "Review A");
+  store.delete("queuedPrompt", id);
+  assert.equal(store.get("queuedPrompt", id), undefined);
+  store.put("dailyUsage", "2099-01-01", { id: "2099-01-01", cost: 2.5 });
+  assert.equal(store.get("dailyUsage", "2099-01-01")?.cost, 2.5);
+});
