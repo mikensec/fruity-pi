@@ -564,9 +564,11 @@ async function dispatch(id: string, cmd: Record<string, unknown>) {
   const res = await rpcCall(id, cmd);
   const disposition = res.data?.disposition as string | undefined;
   if (!res.success || disposition === "handled") {
-    running.delete(id);
-    setStatus(id, "idle");
-    drainQueue();
+    if (rt(id).status !== "running" || !res.success) {
+      running.delete(id);
+      setStatus(id, "idle");
+      drainQueue();
+    }
   }
   if (!res.success) appendEvent(id, { type: "fp_error", command: cmd.type, error: res.error });
   if (!res.success && isRateLimitError(res.error ?? "")) {
